@@ -1,29 +1,77 @@
 package mr
 
-import "log"
+import (
+	"log"
+	"sync"
+)
 import "net"
 import "os"
 import "net/rpc"
 import "net/http"
 
+const (
+	Map = iota
+	Reduce
+	Done
+	Wait
+)
+
+type void struct{}
+
+type Phase struct {
+	Map, Reduce, Done, Wait chan void
+}
 
 type Coordinator struct {
-	// Your definitions here.
+	// map
+	files     []string
+	mapAlloc  int
+	mapFinish int
+	// reduce
+	nReduce      int
+	reduceAlloc  int
+	reduceFinish int
 
+	mu    sync.Mutex
+	phase Phase
 }
 
-// Your code here -- RPC handlers for the worker to call.
-
-//
-// an example RPC handler.
-//
-// the RPC argument and reply types are defined in rpc.go.
-//
-func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-	reply.Y = args.X + 1
-	return nil
+func (c *Coordinator) Job(_ *struct{}, reply *JobReply) error {
+	select {
+	case <-c.phase.Map:
+		if c.mapAlloc == len(c.files) {
+			defer func() { go func() { c.phase.Reduce <- void{} }() }()
+			reply.Type = Wait
+			return nil
+		}
+		defer func() { go func() { c.phase.Map <- void{} }() }()
+		reply.ID = c.mapAlloc
+		reply.Type = Map
+		reply.ReduceN = c.nReduce
+		reply.Filename = c.files[c.mapAlloc]
+		reply.MapN = len(c.files)
+		c.mapAlloc += 1
+		return nil
+	case <-c.phase.Reduce:
+		if c.reduceAlloc == c.nReduce {
+			defer func() { go func() { c.phase.Done <- void{} }() }()
+			reply.Type = Done
+			return nil
+		}
+		defer func() { go func() { c.phase.Reduce <- void{} }() }()
+		reply.ID = c.reduceAlloc
+		reply.Type = Reduce
+		reply.ReduceN = c.nReduce
+		reply.Filename = ""
+		reply.MapN = len(c.files)
+		c.reduceAlloc += 1
+		return nil
+	case <-c.phase.Done:
+		defer func() { go func() { c.phase.Done <- void{} }() }()
+		reply.Type = Done
+		return nil
+	}
 }
-
 
 //
 // start a thread that listens for RPCs from worker.go
@@ -41,30 +89,37 @@ func (c *Coordinator) server() {
 	go http.Serve(l, nil)
 }
 
-//
+// Done
 // main/mrcoordinator.go calls Done() periodically to find out
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	ret := false
-
-	// Your code here.
-
-
-	return ret
+	select {
+	case <-c.phase.Done:
+		defer func() { go func() { c.phase.Done <- void{} }() }()
+		return true
+	default:
+	}
+	return false
 }
 
-//
+// MakeCoordinator
 // create a Coordinator.
 // main/mrcoordinator.go calls this function.
 // nReduce is the number of reduce tasks to use.
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{}
-
-	// Your code here.
-
-
+	c := Coordinator{
+		files:   files,
+		nReduce: nReduce,
+		phase: Phase{
+			Map:    make(chan void),
+			Reduce: make(chan void),
+			Done:   make(chan void),
+			Wait:   make(chan void),
+		},
+	}
 	c.server()
+	go func() { c.phase.Map <- void{} }()
 	return &c
 }
