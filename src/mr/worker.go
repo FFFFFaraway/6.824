@@ -47,7 +47,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	for {
 		reply := GetJob()
 		if reply.Type == Wait {
-			time.Sleep(time.Second)
+			time.Sleep(100 * time.Millisecond)
 			continue
 		}
 		if reply.Type == Map {

@@ -2,7 +2,6 @@ package mr
 
 import (
 	"log"
-	"sync"
 )
 import "net"
 import "os"
@@ -32,7 +31,6 @@ type Coordinator struct {
 	reduceAlloc  int
 	reduceFinish int
 
-	mu    sync.Mutex
 	phase Phase
 }
 
@@ -40,34 +38,34 @@ func (c *Coordinator) Job(_ *struct{}, reply *JobReply) error {
 	select {
 	case <-c.phase.Map:
 		if c.mapAlloc == len(c.files) {
-			defer func() { go func() { c.phase.Reduce <- void{} }() }()
+			go func() { c.phase.Reduce <- void{} }()
 			reply.Type = Wait
 			return nil
 		}
-		defer func() { go func() { c.phase.Map <- void{} }() }()
 		reply.ID = c.mapAlloc
-		reply.Type = Map
 		reply.ReduceN = c.nReduce
 		reply.Filename = c.files[c.mapAlloc]
 		reply.MapN = len(c.files)
 		c.mapAlloc += 1
+		go func() { c.phase.Map <- void{} }()
+		reply.Type = Map
 		return nil
 	case <-c.phase.Reduce:
 		if c.reduceAlloc == c.nReduce {
-			defer func() { go func() { c.phase.Done <- void{} }() }()
+			go func() { c.phase.Done <- void{} }()
 			reply.Type = Done
 			return nil
 		}
-		defer func() { go func() { c.phase.Reduce <- void{} }() }()
 		reply.ID = c.reduceAlloc
-		reply.Type = Reduce
 		reply.ReduceN = c.nReduce
-		reply.Filename = ""
 		reply.MapN = len(c.files)
 		c.reduceAlloc += 1
+		go func() { c.phase.Reduce <- void{} }()
+		reply.Type = Reduce
+		reply.Filename = ""
 		return nil
 	case <-c.phase.Done:
-		defer func() { go func() { c.phase.Done <- void{} }() }()
+		go func() { c.phase.Done <- void{} }()
 		reply.Type = Done
 		return nil
 	}
@@ -96,7 +94,7 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 	select {
 	case <-c.phase.Done:
-		defer func() { go func() { c.phase.Done <- void{} }() }()
+		go func() { c.phase.Done <- void{} }()
 		return true
 	default:
 	}
