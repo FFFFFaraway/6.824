@@ -34,11 +34,24 @@ type Coordinator struct {
 	phase Phase
 }
 
+func (c *Coordinator) FinishJob(args *JobReply, _ *struct{}) error {
+	if args.Type == Map {
+		c.mapFinish += 1
+	} else if args.Type == Reduce {
+		c.reduceFinish += 1
+	}
+	return nil
+}
+
 func (c *Coordinator) Job(_ *struct{}, reply *JobReply) error {
 	select {
 	case <-c.phase.Map:
 		if c.mapAlloc == len(c.files) {
-			go func() { c.phase.Reduce <- void{} }()
+			if c.mapFinish == len(c.files) {
+				go func() { c.phase.Reduce <- void{} }()
+			} else {
+				go func() { c.phase.Map <- void{} }()
+			}
 			reply.Type = Wait
 			return nil
 		}
@@ -52,7 +65,11 @@ func (c *Coordinator) Job(_ *struct{}, reply *JobReply) error {
 		return nil
 	case <-c.phase.Reduce:
 		if c.reduceAlloc == c.nReduce {
-			go func() { c.phase.Done <- void{} }()
+			if c.reduceFinish == c.nReduce {
+				go func() { c.phase.Done <- void{} }()
+			} else {
+				go func() { c.phase.Reduce <- void{} }()
+			}
 			reply.Type = Done
 			return nil
 		}

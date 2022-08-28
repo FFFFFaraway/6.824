@@ -70,6 +70,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				i := ihash(kv.Key) % reply.ReduceN
 				fmt.Fprintf(interFiles[i], "%v %v\n", kv.Key, kv.Value)
 			}
+			FinishJob(reply)
 			continue
 		}
 		if reply.Type == Reduce {
@@ -111,6 +112,7 @@ func Worker(mapf func(string, string) []KeyValue,
 				i = j
 			}
 			ofile.Close()
+			FinishJob(reply)
 			continue
 		}
 		if reply.Type == Done {
@@ -128,6 +130,16 @@ func GetJob() *JobReply {
 		fmt.Printf("call failed!\n")
 	}
 	return &reply
+}
+
+func FinishJob(r *JobReply) {
+	reply := struct{}{}
+
+	ok := call("Coordinator.FinishJob", &r, &reply)
+	if !ok {
+		fmt.Printf("call failed!\n")
+	}
+	return
 }
 
 //
