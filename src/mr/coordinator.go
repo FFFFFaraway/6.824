@@ -15,13 +15,12 @@ const (
 	Map = iota
 	Reduce
 	Done
-	Wait
 )
 
 type void struct{}
 
 type Phase struct {
-	Map, Reduce, Done, Wait chan void
+	Map, Reduce, Done chan void
 }
 
 type Coordinator struct {
@@ -179,7 +178,6 @@ func MakeCoordinator(files []string, nReduce int) *Coordinator {
 			Map:    make(chan void),
 			Reduce: make(chan void),
 			Done:   make(chan void),
-			Wait:   make(chan void),
 		},
 		mapAllocCh:    make(chan *JobReply),
 		reduceAllocCh: make(chan *JobReply),
