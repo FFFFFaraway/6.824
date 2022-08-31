@@ -7,7 +7,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 )
 import "log"
 import "net/rpc"
@@ -46,10 +45,6 @@ func Worker(mapf func(string, string) []KeyValue,
 
 	for {
 		reply := GetJob()
-		if reply.Type == Wait {
-			time.Sleep(100 * time.Millisecond)
-			continue
-		}
 		if reply.Type == Map {
 			filename := reply.Filename
 			file, err := os.Open(filename)
