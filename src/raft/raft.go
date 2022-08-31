@@ -18,16 +18,17 @@ package raft
 //
 
 import (
-	//	"bytes"
-	"sync"
+	"context"
+	"math/rand"
+
 	"sync/atomic"
+	"time"
 
 	//	"6.824/labgob"
 	"6.824/labrpc"
 )
 
-
-//
+// ApplyMsg
 // as each Raft peer becomes aware that successive log entries are
 // committed, the peer should send an ApplyMsg to the service (or
 // tester) on the same server, via the applyCh passed to Make(). set
@@ -50,30 +51,62 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
-//
+type void struct{}
+
+type Phase struct {
+	Leader    chan void
+	Candidate chan void
+	Follower  chan void
+	// exit leader or candidate phase, become follower
+	Exit chan void
+}
+
+const (
+	RequestVoteTotalTimeout    = 100 * time.Millisecond
+	HeartBeatTimeout           = 100 * time.Millisecond
+	ElectionTimeoutStart       = 1000 * time.Millisecond
+	ElectionTimeoutRandomRange = 1000 // time.Millisecond
+	FollowerSleepTimeout       = 100 * time.Millisecond
+)
+
+// Raft
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	mu        sync.Mutex          // Lock to protect shared access to this peer's state
+	//mu        sync.Mutex          // Lock to protect shared access to this peer's state
+
+	// peers read only no mutex need
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
-	me        int                 // this peer's index into peers[]
-	dead      int32               // set by Kill()
+	// me read only no mutex need
+	me int // this peer's index into peers[]
+	// atomic
+	dead int32 // set by Kill()
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-
+	reset   chan void
+	phase   Phase
+	term    chan int
+	voteFor chan int
 }
 
-// return currentTerm and whether this server
+// GetState return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
+	term := <-rf.term
+	go func() { rf.term <- term }()
+	isLeader := false
 
-	var term int
-	var isleader bool
-	// Your code here (2A).
-	return term, isleader
+	select {
+	case <-rf.phase.Leader:
+		go func() { rf.phase.Leader <- void{} }()
+		isLeader = true
+	default:
+	}
+
+	return term, isLeader
 }
 
 //
@@ -91,7 +124,6 @@ func (rf *Raft) persist() {
 	// data := w.Bytes()
 	// rf.persister.SaveRaftState(data)
 }
-
 
 //
 // restore previously persisted state.
@@ -115,8 +147,7 @@ func (rf *Raft) readPersist(data []byte) {
 	// }
 }
 
-
-//
+// CondInstallSnapshot
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
 //
@@ -127,7 +158,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	return true
 }
 
-// the service says it has created a snapshot that has
+// Snapshot the service says it has created a snapshot that has
 // all info up to and including index. this means the
 // service no longer needs the log through (and including)
 // that index. Raft should now trim its log as much as possible.
@@ -136,28 +167,73 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 
 }
 
-
-//
+// RequestVoteArgs
 // example RequestVote RPC arguments structure.
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
-	// Your data here (2A, 2B).
+	Term        int
+	CandidateId int
 }
 
-//
+// RequestVoteReply
 // example RequestVote RPC reply structure.
 // field names must start with capital letters!
 //
 type RequestVoteReply struct {
-	// Your data here (2A).
+	Term int
+	Vote bool
 }
 
-//
+type AEArgs struct {
+	Term int
+}
+
+type AEReply struct {
+	Term int
+}
+
+// RequestVote
 // example RequestVote RPC handler.
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
-	// Your code here (2A, 2B).
+	term := <-rf.term
+	reply.Term = term
+	if args.Term > term {
+		Debug(dTerm, rf.me, "<- RV from S%v, newer term:%v", args.CandidateId, args.Term)
+		go func() { rf.term <- args.Term }()
+		go func() { rf.phase.Exit <- void{} }()
+		reply.Vote = true
+		Debug(dVote, rf.me, "Grant Vote -> S%v", args.CandidateId)
+		<-rf.voteFor
+		go func() { rf.voteFor <- args.CandidateId }()
+		return
+	}
+
+	go func() { rf.term <- term }()
+
+	if args.Term < term {
+		return
+	}
+
+	select {
+	case <-rf.phase.Follower:
+		go func() { rf.phase.Follower <- void{} }()
+		go func() { rf.reset <- void{} }()
+	default:
+	}
+
+	vf := <-rf.voteFor
+	// voted for someone else
+	if vf != -1 {
+		go func() { rf.voteFor <- vf }()
+		return
+	}
+
+	Debug(dVote, rf.me, "Grant Vote -> S%v, Same Term", args.CandidateId)
+	go func() { rf.voteFor <- args.CandidateId }()
+	reply.Vote = true
+	return
 }
 
 //
@@ -194,8 +270,41 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 	return ok
 }
 
+func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
+	term := <-rf.term
+	reply.Term = term
+	if args.Term > term {
+		Debug(dTerm, rf.me, "<- AE, newer term:%v", args.Term)
+		go func() { rf.term <- args.Term }()
+		go func() { rf.phase.Exit <- void{} }()
+		return
+	}
 
-//
+	go func() { rf.term <- term }()
+
+	if args.Term < term {
+		return
+	}
+
+	select {
+	case <-rf.phase.Candidate:
+		Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
+		go func() { rf.phase.Candidate <- void{} }()
+		go func() { rf.phase.Exit <- void{} }()
+	// leader with same term is not possible to receive an AE
+	case <-rf.phase.Follower:
+		Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
+		go func() { rf.phase.Follower <- void{} }()
+		go func() { rf.reset <- void{} }()
+	}
+}
+
+func (rf *Raft) sendAE(server int, args *AEArgs, reply *AEReply) bool {
+	ok := rf.peers[server].Call("Raft.AE", args, reply)
+	return ok
+}
+
+// Start
 // the service using Raft (e.g. a k/v server) wants to start
 // agreement on the next command to be appended to Raft's log. if this
 // server isn't the leader, returns false. otherwise start the
@@ -211,16 +320,21 @@ func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *Reques
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
-	term := -1
-	isLeader := true
+	term := <-rf.term
+	go func() { rf.term <- term }()
+	isLeader := false
 
-	// Your code here (2B).
-
+	select {
+	case <-rf.phase.Leader:
+		go func() { rf.phase.Leader <- void{} }()
+		isLeader = true
+	default:
+	}
 
 	return index, term, isLeader
 }
 
-//
+// Kill
 // the tester doesn't halt goroutines created by Raft after each test,
 // but it does call the Kill() method. your code can use killed() to
 // check whether Kill() has been called. the use of atomic avoids the
@@ -241,19 +355,217 @@ func (rf *Raft) killed() bool {
 	return z == 1
 }
 
+func timeoutCh(t time.Duration) (done chan void) {
+	done = make(chan void)
+	go func() {
+		time.Sleep(t)
+		done <- void{}
+	}()
+	return
+}
+
+func (rf *Raft) sendHB(term int) {
+	Debug(dLeader, rf.me, "send out HB, term %v", term)
+	for i := range rf.peers {
+		if i != rf.me {
+			go func(i int) {
+				reply := &AEReply{}
+				ok := rf.sendAE(i, &AEArgs{Term: term}, reply)
+				term := <-rf.term
+				if ok && reply.Term > term {
+					go func() { rf.term <- reply.Term }()
+					go func() { rf.phase.Exit <- void{} }()
+					return
+				}
+				go func() { rf.term <- term }()
+			}(i)
+		}
+	}
+
+}
+
+func (rf *Raft) becomeLeader() {
+	// stop candidate
+	<-rf.phase.Candidate
+
+	term := <-rf.term
+	go func() { rf.term <- term }()
+	Debug(dPhase, rf.me, "become Leader %v", term)
+
+	// voteFor unchanged
+
+	rf.phase.Leader <- void{}
+}
+
+func (rf *Raft) Leader() {
+main:
+	for {
+		<-rf.phase.Leader
+		if rf.killed() {
+			return
+		}
+
+		select {
+		case <-rf.phase.Exit:
+			rf.becomeFollower()
+			continue main
+		default:
+			// if someone take the rf.leader, then it won't execute the leader code
+			go func() { rf.phase.Leader <- void{} }()
+		}
+
+		term := <-rf.term
+		go func() { rf.term <- term }()
+		go rf.sendHB(term)
+
+		time.Sleep(HeartBeatTimeout)
+	}
+}
+
+func (rf *Raft) sendAllRV() {
+	cnt := make(chan int)
+	ctx, cancel := context.WithTimeout(context.Background(), RequestVoteTotalTimeout)
+	defer cancel()
+	suc := make(chan void)
+	term := <-rf.term
+	go func() { rf.term <- term }()
+	// add self
+	need := len(rf.peers) / 2
+	go func() { cnt <- 0 }()
+	for i := range rf.peers {
+		if i != rf.me {
+			go func(ctx context.Context, i int) {
+				reply := &RequestVoteReply{}
+				ok := rf.sendRequestVote(i, &RequestVoteArgs{Term: term, CandidateId: rf.me}, reply)
+
+				term := <-rf.term
+				if reply.Term > term {
+					go func() { rf.term <- reply.Term }()
+					go func() { rf.phase.Exit <- void{} }()
+					return
+				}
+				go func() { rf.term <- term }()
+
+				if ok && reply.Vote {
+					select {
+					case <-ctx.Done():
+						return
+					default:
+						cnt <- <-cnt + 1
+					}
+				}
+			}(ctx, i)
+		}
+	}
+	// periodically check if cnt satisfy the need
+	go func(ctx context.Context) {
+		for {
+			select {
+			case c := <-cnt:
+				if c >= need {
+					suc <- void{}
+					return
+				}
+				// block here wait for RV ack
+				cnt <- c
+			case <-ctx.Done():
+				return
+			}
+		}
+	}(ctx)
+
+	select {
+	case <-suc:
+		Debug(dElection, rf.me, "election success")
+		rf.becomeLeader()
+	case <-ctx.Done():
+		Debug(dElection, rf.me, "election fail, timeout")
+		// election fail, continue being follower
+		rf.becomeFollower()
+	case <-rf.phase.Exit:
+		Debug(dElection, rf.me, "election fail, exit")
+		rf.becomeFollower()
+	}
+}
+
+func (rf *Raft) becomeCandidate() {
+	// stop follower phase, handle rpc as phase of candidate
+	<-rf.phase.Follower
+	go func() { rf.phase.Candidate <- void{} }()
+
+	term := <-rf.term
+	go func(term int) {
+		Debug(dTerm, rf.me, "inc %v -> %v", term, term+1)
+		rf.term <- term + 1
+	}(term)
+	Debug(dPhase, rf.me, "become Candidate %v", term+1)
+clean:
+	for {
+		select {
+		case <-rf.voteFor:
+		default:
+			break clean
+		}
+	}
+	// leader vote for self
+	go func() { rf.voteFor <- rf.me }()
+
+	rf.sendAllRV()
+}
+
+func (rf *Raft) becomeFollower() {
+	term := <-rf.term
+	go func() { rf.term <- term }()
+	Debug(dPhase, rf.me, "become Follower %v", term)
+clean:
+	for {
+		select {
+		case <-rf.voteFor:
+		case <-rf.phase.Candidate:
+		case <-rf.phase.Leader:
+		default:
+			break clean
+		}
+	}
+	go func() { rf.voteFor <- -1 }()
+	rf.phase.Follower <- void{}
+	go rf.ticker()
+}
+
+func (rf *Raft) Follower() {
+	for {
+		<-rf.phase.Follower
+		if rf.killed() {
+			return
+		}
+
+		go func() { rf.phase.Follower <- void{} }()
+		select {
+		case <-rf.phase.Exit:
+			go func() { rf.reset <- void{} }()
+		default:
+		}
+		time.Sleep(FollowerSleepTimeout)
+	}
+}
+
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
 	for rf.killed() == false {
-
-		// Your code here to check if a leader election should
-		// be started and to randomize sleeping time using
-		// time.Sleep().
-
+		span := rand.Intn(ElectionTimeoutRandomRange)
+		timeout := timeoutCh(ElectionTimeoutStart + time.Duration(span)*time.Millisecond)
+		select {
+		case <-timeout:
+			rf.becomeCandidate()
+			return
+		// suppress the reset button by AE or RV or heartbeat
+		case <-rf.reset:
+		}
 	}
 }
 
-//
+// Make
 // the service or tester wants to create a Raft server. the ports
 // of all the Raft servers (including this one) are in peers[]. this
 // server's port is peers[me]. all the servers' peers[] arrays
@@ -266,19 +578,32 @@ func (rf *Raft) ticker() {
 //
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
-	rf := &Raft{}
+	rf := &Raft{
+		peers:     peers,
+		persister: persister,
+		me:        me,
+		reset:     make(chan void),
+		phase: Phase{
+			Leader:    make(chan void),
+			Candidate: make(chan void),
+			Follower:  make(chan void),
+			Exit:      make(chan void),
+		},
+		term:    make(chan int),
+		voteFor: make(chan int),
+	}
 	rf.peers = peers
 	rf.persister = persister
 	rf.me = me
-
-	// Your initialization code here (2A, 2B, 2C).
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
-	go rf.ticker()
-
+	go rf.Follower()
+	go rf.Leader()
+	go func() { rf.term <- 0 }()
+	rf.becomeFollower()
 
 	return rf
 }
