@@ -40,6 +40,11 @@ type Phase struct {
 	Exit chan void
 }
 
+type Entry struct {
+	Term    int
+	Command interface{}
+}
+
 const (
 	RequestVoteTotalTimeout    = 100 * time.Millisecond
 	HeartBeatTimeout           = 100 * time.Millisecond
@@ -69,6 +74,11 @@ type Raft struct {
 	phase   Phase
 	term    chan int
 	voteFor chan int
+
+	log []*Entry
+	// don't know whether there is a better way to operate logs
+	logCh   chan void
+	applyCh chan ApplyMsg
 }
 
 // GetState return currentTerm and whether this server
@@ -115,6 +125,21 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	default:
 	}
 
+	if !isLeader {
+		return index, term, isLeader
+	}
+
+	// append entry to log
+	<-rf.logCh
+	rf.log = append(rf.log, &Entry{
+		Term:    term,
+		Command: command,
+	})
+	index = len(rf.log)
+	go func() { rf.logCh <- void{} }()
+	// send to followers by AE
+	go rf.startAgreement(command, index)
+
 	return index, term, isLeader
 }
 
@@ -144,18 +169,17 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		},
 		term:    make(chan int),
 		voteFor: make(chan int),
+		log:     make([]*Entry, 0),
+		logCh:   make(chan void),
+		applyCh: applyCh,
 	}
-	rf.peers = peers
-	rf.persister = persister
-	rf.me = me
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
-	go rf.Follower()
-	go rf.Leader()
 	go func() { rf.term <- 0 }()
+	go func() { rf.logCh <- void{} }()
 	rf.becomeFollower()
 
 	return rf
