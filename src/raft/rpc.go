@@ -20,6 +20,7 @@ type RequestVoteReply struct {
 
 type AEArgs struct {
 	Term int
+	Logs []*Entry
 }
 
 type AEReply struct {
