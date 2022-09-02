@@ -29,6 +29,7 @@ const (
 	dWarn     logTopic = "WARN"
 	dPhase    logTopic = "PHAS"
 	dElection logTopic = "ELEC"
+	dClean    logTopic = "CLEA"
 )
 
 // Retrieve the verbosity level from an environment variable

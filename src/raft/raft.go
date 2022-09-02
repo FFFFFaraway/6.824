@@ -187,6 +187,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() { rf.leaderCtxCh <- void{} }()
 	go rf.Follower()
 	rf.becomeFollower()
+	go rf.cleaner()
 
 	return rf
 }
