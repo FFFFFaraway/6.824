@@ -180,7 +180,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	go func() { rf.term <- 0 }()
 	go func() { rf.logCh <- void{} }()
-	go rf.Leader()
 	go rf.Follower()
 	rf.becomeFollower()
 

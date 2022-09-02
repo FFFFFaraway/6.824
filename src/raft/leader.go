@@ -117,6 +117,7 @@ clean:
 	}
 	// voteFor unchanged nothing to do
 	go func() { rf.phase.Leader <- void{} }()
+	go rf.Leader()
 
 	term := <-rf.term
 	go func() { rf.term <- term }()
@@ -124,7 +125,6 @@ clean:
 }
 
 func (rf *Raft) Leader() {
-main:
 	for {
 		<-rf.phase.Leader
 		if rf.killed() {
@@ -134,7 +134,7 @@ main:
 		select {
 		case <-rf.phase.Exit:
 			rf.becomeFollower()
-			continue main
+			return
 		default:
 			go func() { rf.phase.Leader <- void{} }()
 		}
