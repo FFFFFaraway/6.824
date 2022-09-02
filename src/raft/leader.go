@@ -117,7 +117,6 @@ clean:
 	}
 	// voteFor unchanged nothing to do
 	go func() { rf.phase.Leader <- void{} }()
-	go rf.Leader()
 
 	term := <-rf.term
 	go func() { rf.term <- term }()
