@@ -16,16 +16,15 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 	cnt := make(chan int)
 	need := len(rf.peers) / 2
 	suc := make(chan void)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	go func() { cnt <- 0 }()
 
 	for i := range rf.peers {
 		if i != rf.me {
-			go func(ctx context.Context, i int) {
+			go func(i int) {
 				reply := &AEReply{}
 				ok := rf.sendAE(i, &AEArgs{Term: term, Logs: log}, reply)
+
 				term := <-rf.term
 				if ok && reply.Term > term {
 					go func() { rf.term <- reply.Term }()
@@ -34,35 +33,44 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 				}
 				go func() { rf.term <- term }()
 
+				<-rf.leaderCtxCh
+				defer func() { go func() { rf.leaderCtxCh <- void{} }() }()
 				if ok {
 					select {
-					case <-ctx.Done():
+					case <-rf.leaderCtx.Done():
 						return
 					default:
 						cnt <- <-cnt + 1
 					}
 				}
-			}(ctx, i)
+			}(i)
 		}
 	}
 
 	// periodically check if cnt satisfy the need
-	go func(ctx context.Context) {
+	// 不过有一说一，这一坨代码真烂
+	go func() {
 		for {
+			<-rf.leaderCtxCh
 			select {
 			case c := <-cnt:
 				if c >= need {
 					suc <- void{}
+					go func() { rf.leaderCtxCh <- void{} }()
 					return
 				}
+				go func() { rf.leaderCtxCh <- void{} }()
 				// block here wait for RV ack
 				cnt <- c
-			case <-ctx.Done():
+			case <-rf.leaderCtx.Done():
+				go func() { rf.leaderCtxCh <- void{} }()
 				return
 			}
 		}
-	}(ctx)
+	}()
 
+	<-rf.leaderCtxCh
+	defer func() { go func() { rf.leaderCtxCh <- void{} }() }()
 	// wait util exit, no timeout, no retry
 	select {
 	case <-suc:
@@ -72,9 +80,7 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 			Command:      command,
 			CommandIndex: index,
 		}
-	// TODO: this is bad, it's possible not grab the Exit (grabbed by the main loop)
-	case <-rf.phase.Exit:
-		go func() { rf.phase.Exit <- void{} }()
+	case <-rf.leaderCtx.Done():
 		Debug(dElection, rf.me, "agreement fail, exit")
 		rf.applyCh <- ApplyMsg{
 			CommandValid: false,
@@ -93,6 +99,7 @@ func (rf *Raft) sendHB() {
 			go func(i int) {
 				reply := &AEReply{}
 				ok := rf.sendAE(i, &AEArgs{Term: term}, reply)
+
 				term := <-rf.term
 				if ok && reply.Term > term {
 					go func() { rf.term <- reply.Term }()
@@ -117,14 +124,20 @@ clean:
 	}
 	// voteFor unchanged nothing to do
 	go func() { rf.phase.Leader <- void{} }()
-	go rf.Leader()
+
+	var cancel context.CancelFunc
+	<-rf.leaderCtxCh
+	rf.leaderCtx, cancel = context.WithCancel(context.Background())
+	go func() { rf.leaderCtxCh <- void{} }()
+	go rf.Leader(cancel)
 
 	term := <-rf.term
 	go func() { rf.term <- term }()
 	Debug(dPhase, rf.me, "become Leader %v", term)
 }
 
-func (rf *Raft) Leader() {
+func (rf *Raft) Leader(cancel context.CancelFunc) {
+	defer cancel()
 	for {
 		<-rf.phase.Leader
 		if rf.killed() {

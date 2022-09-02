@@ -1,6 +1,7 @@
 package raft
 
 import (
+	"context"
 	"time"
 
 	//	"6.824/labgob"
@@ -77,8 +78,10 @@ type Raft struct {
 
 	log []*Entry
 	// don't know whether there is a better way to operate logs
-	logCh   chan void
-	applyCh chan ApplyMsg
+	logCh       chan void
+	applyCh     chan ApplyMsg
+	leaderCtx   context.Context
+	leaderCtxCh chan void
 }
 
 // GetState return currentTerm and whether this server
@@ -167,11 +170,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			Follower:  make(chan void),
 			Exit:      make(chan void),
 		},
-		term:    make(chan int),
-		voteFor: make(chan int),
-		log:     make([]*Entry, 0),
-		logCh:   make(chan void),
-		applyCh: applyCh,
+		term:        make(chan int),
+		voteFor:     make(chan int),
+		log:         make([]*Entry, 0),
+		logCh:       make(chan void),
+		applyCh:     applyCh,
+		leaderCtxCh: make(chan void),
 	}
 
 	// initialize from state persisted before a crash
@@ -180,6 +184,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	go func() { rf.term <- 0 }()
 	go func() { rf.logCh <- void{} }()
+	go func() { rf.leaderCtxCh <- void{} }()
 	go rf.Follower()
 	rf.becomeFollower()
 
