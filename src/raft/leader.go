@@ -35,9 +35,8 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 				}
 				go func() { rf.term <- term }()
 
-				<-rf.leaderCtxCh
-				ctx := rf.leaderCtx
-				go func() { rf.leaderCtxCh <- void{} }()
+				ctx := <-rf.leaderCtx
+				go func() { rf.leaderCtx <- ctx }()
 
 				if ok {
 					select {
@@ -54,9 +53,8 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 	// periodically check if cnt satisfy the need
 	go func() {
 		for {
-			<-rf.leaderCtxCh
-			ctx := rf.leaderCtx
-			go func() { rf.leaderCtxCh <- void{} }()
+			ctx := <-rf.leaderCtx
+			go func() { rf.leaderCtx <- ctx }()
 
 			select {
 			case c := <-cnt:
@@ -75,9 +73,8 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 	// press the heartbeatTimer
 	go func() { rf.heartbeatTimer <- void{} }()
 
-	<-rf.leaderCtxCh
-	ctx := rf.leaderCtx
-	go func() { rf.leaderCtxCh <- void{} }()
+	ctx := <-rf.leaderCtx
+	go func() { rf.leaderCtx <- ctx }()
 	// wait util exit, no timeout, no retry
 	select {
 	case <-suc:
@@ -131,6 +128,7 @@ clean:
 		select {
 		// stop candidate
 		case <-rf.phase.Candidate:
+		case <-rf.leaderCtx:
 		default:
 			break clean
 		}
@@ -139,9 +137,9 @@ clean:
 	go func() { rf.phase.Leader <- void{} }()
 
 	var cancel context.CancelFunc
-	<-rf.leaderCtxCh
-	rf.leaderCtx, cancel = context.WithCancel(context.Background())
-	go func() { rf.leaderCtxCh <- void{} }()
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() { rf.leaderCtx <- ctx }()
+
 	go rf.Leader(cancel)
 	go rf.HB()
 
@@ -153,9 +151,8 @@ clean:
 func (rf *Raft) HB() {
 	go rf.sendHB()
 	for {
-		<-rf.leaderCtxCh
-		ctx := rf.leaderCtx
-		go func() { rf.leaderCtxCh <- void{} }()
+		ctx := <-rf.leaderCtx
+		go func() { rf.leaderCtx <- ctx }()
 
 		timeout := timeoutCh(HeartBeatTimeout)
 

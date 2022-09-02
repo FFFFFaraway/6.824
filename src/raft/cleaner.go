@@ -28,8 +28,8 @@ func (rf *Raft) cleaner() {
 					Debug(dClean, rf.me, "rf.voteFor %v", vf)
 				case <-rf.logCh:
 					Debug(dClean, rf.me, "rf.logCh")
-				case <-rf.leaderCtxCh:
-					Debug(dClean, rf.me, "rf.leaderCtxCh")
+				case <-rf.leaderCtx:
+					Debug(dClean, rf.me, "rf.leaderCtx")
 				case c := <-rf.commitIndex:
 					Debug(dClean, rf.me, "rf.commitIndex %v", c)
 				case l := <-rf.lastApplied:

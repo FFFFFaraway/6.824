@@ -99,11 +99,6 @@ func (rf *Raft) applier() {
 			}
 		}
 
-		select {
-		case <-rf.phase.Exit:
-			go func() { rf.electionTimer <- void{} }()
-		default:
-		}
 		time.Sleep(ApplierSleepTimeout)
 	}
 }

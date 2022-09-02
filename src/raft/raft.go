@@ -83,8 +83,7 @@ type Raft struct {
 	// don't know whether there is a better way to operate logs
 	logCh       chan void
 	applyCh     chan ApplyMsg
-	leaderCtx   context.Context
-	leaderCtxCh chan void
+	leaderCtx   chan context.Context
 	commitIndex chan int
 	lastApplied chan int
 }
@@ -176,12 +175,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			Follower:  make(chan void),
 			Exit:      make(chan void),
 		},
-		term:        make(chan int),
-		voteFor:     make(chan int),
-		log:         make([]*Entry, 0),
-		logCh:       make(chan void),
-		applyCh:     applyCh,
-		leaderCtxCh: make(chan void),
+		term:      make(chan int),
+		voteFor:   make(chan int),
+		log:       make([]*Entry, 0),
+		logCh:     make(chan void),
+		applyCh:   applyCh,
+		leaderCtx: make(chan context.Context),
+		//leaderCtxCh: make(chan void),
 		commitIndex: make(chan int),
 		lastApplied: make(chan int),
 	}
@@ -192,7 +192,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	// start ticker goroutine to start elections
 	go func() { rf.term <- 0 }()
 	go func() { rf.logCh <- void{} }()
-	go func() { rf.leaderCtxCh <- void{} }()
 	go func() { rf.commitIndex <- 0 }()
 	go func() { rf.lastApplied <- 0 }()
 	go rf.Follower()
