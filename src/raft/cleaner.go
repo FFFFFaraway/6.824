@@ -7,11 +7,13 @@ import (
 func (rf *Raft) cleaner() {
 	for {
 		if rf.killed() {
-			time.Sleep(FollowerSleepTimeout)
+			time.Sleep(KilledCheckTimeout)
 			for {
 				select {
-				case <-rf.reset:
-					Debug(dClean, rf.me, "rf.reset")
+				case <-rf.heartbeatTimer:
+					Debug(dClean, rf.me, "rf.heartbeatTimer")
+				case <-rf.electionTimer:
+					Debug(dClean, rf.me, "rf.electionTimer")
 				case <-rf.phase.Leader:
 					Debug(dClean, rf.me, "rf.phase.Leader")
 				case <-rf.phase.Candidate:
@@ -28,11 +30,15 @@ func (rf *Raft) cleaner() {
 					Debug(dClean, rf.me, "rf.logCh")
 				case <-rf.leaderCtxCh:
 					Debug(dClean, rf.me, "rf.leaderCtxCh")
+				case c := <-rf.commitIndex:
+					Debug(dClean, rf.me, "rf.commitIndex %v", c)
+				case l := <-rf.lastApplied:
+					Debug(dClean, rf.me, "rf.lastApplied %v", l)
 				default:
 					return
 				}
 			}
 		}
-		time.Sleep(FollowerSleepTimeout)
+		time.Sleep(KilledCheckTimeout)
 	}
 }

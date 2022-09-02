@@ -52,6 +52,8 @@ const (
 	ElectionTimeoutStart       = 1000 * time.Millisecond
 	ElectionTimeoutRandomRange = 1000 // time.Millisecond
 	FollowerSleepTimeout       = 100 * time.Millisecond
+	KilledCheckTimeout         = 100 * time.Millisecond
+	ApplierSleepTimeout        = 100 * time.Millisecond
 )
 
 // Raft
@@ -71,10 +73,11 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	reset   chan void
-	phase   Phase
-	term    chan int
-	voteFor chan int
+	electionTimer  chan void
+	heartbeatTimer chan void
+	phase          Phase
+	term           chan int
+	voteFor        chan int
 
 	log []*Entry
 	// don't know whether there is a better way to operate logs
@@ -82,6 +85,8 @@ type Raft struct {
 	applyCh     chan ApplyMsg
 	leaderCtx   context.Context
 	leaderCtxCh chan void
+	commitIndex chan int
+	lastApplied chan int
 }
 
 // GetState return currentTerm and whether this server
@@ -160,10 +165,11 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{
-		peers:     peers,
-		persister: persister,
-		me:        me,
-		reset:     make(chan void),
+		peers:          peers,
+		persister:      persister,
+		me:             me,
+		electionTimer:  make(chan void),
+		heartbeatTimer: make(chan void),
 		phase: Phase{
 			Leader:    make(chan void),
 			Candidate: make(chan void),
@@ -176,6 +182,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		logCh:       make(chan void),
 		applyCh:     applyCh,
 		leaderCtxCh: make(chan void),
+		commitIndex: make(chan int),
+		lastApplied: make(chan int),
 	}
 
 	// initialize from state persisted before a crash
@@ -185,6 +193,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() { rf.term <- 0 }()
 	go func() { rf.logCh <- void{} }()
 	go func() { rf.leaderCtxCh <- void{} }()
+	go func() { rf.commitIndex <- 0 }()
+	go func() { rf.lastApplied <- 0 }()
 	go rf.Follower()
 	rf.becomeFollower()
 	go rf.cleaner()

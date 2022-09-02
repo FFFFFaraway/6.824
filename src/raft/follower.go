@@ -18,6 +18,7 @@ clean:
 	}
 	go func() { rf.voteFor <- -1 }()
 	go rf.ticker()
+	go rf.applier()
 	go func() { rf.phase.Follower <- void{} }()
 
 	term := <-rf.term
@@ -35,7 +36,7 @@ func (rf *Raft) Follower() {
 
 		select {
 		case <-rf.phase.Exit:
-			go func() { rf.reset <- void{} }()
+			go func() { rf.electionTimer <- void{} }()
 		default:
 		}
 		time.Sleep(FollowerSleepTimeout)
@@ -52,8 +53,8 @@ func (rf *Raft) ticker() {
 		case <-timeout:
 			rf.becomeCandidate()
 			return
-		// suppress the reset button by AE or RV or heartbeat
-		case <-rf.reset:
+		// suppress the electionTimer button by AE or RV or heartbeat
+		case <-rf.electionTimer:
 		}
 	}
 }
@@ -62,7 +63,47 @@ func timeoutCh(t time.Duration) (done chan void) {
 	done = make(chan void)
 	go func() {
 		time.Sleep(t)
-		done <- void{}
+		select {
+		case done <- void{}:
+		// if no one wait for it, then just abort
+		default:
+		}
 	}()
 	return
+}
+
+func (rf *Raft) applier() {
+	for {
+		<-rf.phase.Follower
+		if rf.killed() {
+			return
+		}
+		go func() { rf.phase.Follower <- void{} }()
+
+		commitIndex := <-rf.commitIndex
+		go func() { rf.commitIndex <- commitIndex }()
+
+		lastApplied := <-rf.lastApplied
+		go func() { rf.lastApplied <- lastApplied }()
+
+		<-rf.logCh
+		log := rf.log
+		go func() { rf.logCh <- void{} }()
+
+		for i := lastApplied + 1; i <= commitIndex; i++ {
+			Debug(dApply, rf.me, "apply %v", i)
+			rf.applyCh <- ApplyMsg{
+				CommandValid: true,
+				Command:      log[i-1].Command,
+				CommandIndex: i,
+			}
+		}
+
+		select {
+		case <-rf.phase.Exit:
+			go func() { rf.electionTimer <- void{} }()
+		default:
+		}
+		time.Sleep(ApplierSleepTimeout)
+	}
 }

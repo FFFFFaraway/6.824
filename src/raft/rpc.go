@@ -19,8 +19,9 @@ type RequestVoteReply struct {
 }
 
 type AEArgs struct {
-	Term int
-	Logs []*Entry
+	Term        int
+	Logs        []*Entry
+	CommitIndex int
 }
 
 type AEReply struct {
@@ -53,8 +54,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	select {
 	case <-rf.phase.Follower:
 		go func() { rf.phase.Follower <- void{} }()
-		// use reset instead of Exit, because it won't wait follower cycle
-		go func() { rf.reset <- void{} }()
+		// use electionTimer instead of Exit, because it won't wait follower cycle
+		go func() { rf.electionTimer <- void{} }()
 	default:
 	}
 
@@ -78,6 +79,20 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		Debug(dTerm, rf.me, "<- AE, newer term:%v", args.Term)
 		go func() { rf.term <- args.Term }()
 		go func() { rf.phase.Exit <- void{} }()
+
+		// Logs
+		if len(args.Logs) > 0 {
+			<-rf.logCh
+			rf.log = args.Logs
+			go func() { rf.logCh <- void{} }()
+		}
+
+		commitIndex := <-rf.commitIndex
+		if args.CommitIndex > commitIndex {
+			go func() { rf.commitIndex <- args.CommitIndex }()
+		} else {
+			go func() { rf.commitIndex <- commitIndex }()
+		}
 		return
 	}
 
@@ -96,6 +111,20 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	case <-rf.phase.Follower:
 		Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
 		go func() { rf.phase.Follower <- void{} }()
-		go func() { rf.reset <- void{} }()
+		go func() { rf.electionTimer <- void{} }()
+	}
+
+	// Logs
+	if len(args.Logs) > 0 {
+		<-rf.logCh
+		rf.log = args.Logs
+		go func() { rf.logCh <- void{} }()
+	}
+
+	commitIndex := <-rf.commitIndex
+	if args.CommitIndex > commitIndex {
+		go func() { rf.commitIndex <- args.CommitIndex }()
+	} else {
+		go func() { rf.commitIndex <- commitIndex }()
 	}
 }
