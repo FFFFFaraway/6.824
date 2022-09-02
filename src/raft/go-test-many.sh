@@ -50,7 +50,7 @@ if ! go test -c -o tester; then
 fi
 
 # Default to 100 runs unless otherwise specified
-runs=128
+runs=8
 if [ $# -gt 0 ]; then
 	runs="$1"
 fi
@@ -60,10 +60,10 @@ fi
 #if [ $# -gt 1 ]; then
 #	parallelism="$2"
 #fi
-parallelism=128
+parallelism=8
 
 # Default to no test filtering unless otherwise specified
-test="2A"
+test="2B"
 if [ $# -gt 2 ]; then
 	test="$3"
 fi

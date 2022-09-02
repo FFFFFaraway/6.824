@@ -97,6 +97,7 @@ func (rf *Raft) applier() {
 				Command:      log[i-1].Command,
 				CommandIndex: i,
 			}
+			go func() { rf.lastApplied <- <-rf.lastApplied + 1 }()
 		}
 
 		time.Sleep(ApplierSleepTimeout)
