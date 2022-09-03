@@ -54,12 +54,12 @@ type CtxCancel struct {
 const (
 	RequestVoteTotalTimeout    = 100 * time.Millisecond
 	HeartBeatTimeout           = 100 * time.Millisecond
-	ElectionTimeoutStart       = 500 * time.Millisecond
-	ElectionTimeoutRandomRange = 500 // time.Millisecond
+	ElectionTimeoutStart       = 300 * time.Millisecond
+	ElectionTimeoutRandomRange = 200 // time.Millisecond
 	FollowerSleepTimeout       = 100 * time.Millisecond
 	KilledCheckTimeout         = 100 * time.Millisecond
 	ApplierSleepTimeout        = 100 * time.Millisecond
-	SelectTimeout              = 10 * time.Millisecond
+	SelectTimeout              = 50 * time.Millisecond
 )
 
 // Raft

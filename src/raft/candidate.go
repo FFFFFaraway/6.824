@@ -4,10 +4,10 @@ import "context"
 
 func (rf *Raft) becomeCandidate() {
 	<-rf.phase.Follower
-	<-rf.voteFor
-	// leader vote for self
-	go func() { rf.voteFor <- rf.me }()
 	go func() { rf.phase.Candidate <- void{} }()
+	// leader vote for self
+	<-rf.voteFor
+	go func() { rf.voteFor <- rf.me }()
 
 	term := <-rf.term
 	go func() { rf.term <- term + 1 }()
@@ -54,9 +54,10 @@ func (rf *Raft) sendAllRV() {
 
 				term := <-rf.term
 				if reply.Term > term {
+					Debug(dElection, rf.me, "election fail, canceled")
 					go func() { rf.term <- reply.Term }()
 					cancel()
-					go func() { rf.becomeFollower(nil) }()
+					go rf.becomeFollower(nil)
 					return
 				}
 				go func() { rf.term <- term }()
@@ -91,11 +92,20 @@ func (rf *Raft) sendAllRV() {
 
 	select {
 	case <-suc:
-		Debug(dElection, rf.me, "election success")
-		go rf.becomeLeader()
+		select {
+		// it's possible that the suc channel and the cancel are both ready
+		case <-ctx.Done():
+			Debug(dElection, rf.me, "election fail, canceled or timeout")
+			// election fail, continue being follower
+			go rf.becomeFollower(nil)
+		default:
+			Debug(dElection, rf.me, "election success")
+			// must use go to call the cancel func quickly
+			go rf.becomeLeader()
+		}
 	case <-ctx.Done():
 		Debug(dElection, rf.me, "election fail, canceled or timeout")
 		// election fail, continue being follower
-		rf.becomeFollower(nil)
+		go rf.becomeFollower(nil)
 	}
 }

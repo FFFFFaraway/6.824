@@ -31,8 +31,10 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 
 				term := <-rf.term
 				if ok && reply.Term > term {
+					Debug(dTerm, rf.me, "command reply, newer term:%v", reply.Term)
 					go func() { rf.term <- reply.Term }()
-					go func() { rf.becomeFollower(cc) }()
+					cc.cancel()
+					go rf.becomeFollower(cc)
 					return
 				}
 				go func() { rf.term <- term }()
@@ -88,7 +90,7 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 	}
 }
 
-func (rf *Raft) sendHB() {
+func (rf *Raft) sendHB(cc CtxCancel) {
 	term := <-rf.term
 	go func() { rf.term <- term }()
 	Debug(dLeader, rf.me, "send out HB, term %v", term)
@@ -99,9 +101,6 @@ func (rf *Raft) sendHB() {
 	commitIndex := <-rf.commitIndex
 	go func() { rf.commitIndex <- commitIndex }()
 
-	cc := <-rf.leaderCtx
-	go func() { rf.leaderCtx <- cc }()
-
 	for i := range rf.peers {
 		if i != rf.me {
 			go func(i int) {
@@ -110,8 +109,10 @@ func (rf *Raft) sendHB() {
 
 				term := <-rf.term
 				if ok && reply.Term > term {
+					Debug(dTerm, rf.me, "HB reply, newer term:%v", reply.Term)
 					go func() { rf.term <- reply.Term }()
-					go func() { rf.becomeFollower(cc) }()
+					go rf.becomeFollower(nil)
+					cc.cancel()
 					return
 				}
 				go func() { rf.term <- term }()
@@ -127,28 +128,34 @@ func (rf *Raft) becomeLeader() {
 	<-rf.leaderCtx
 	var cancel context.CancelFunc
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { rf.leaderCtx <- &CtxCancel{ctx, cancel} }()
+	cc := CtxCancel{ctx, cancel}
+	go func() { rf.leaderCtx <- &cc }()
 
-	go rf.HB()
+	go rf.HB(cc)
 
 	term := <-rf.term
 	go func() { rf.term <- term }()
 	Debug(dPhase, rf.me, "become Leader %v", term)
 }
 
-func (rf *Raft) HB() {
-	go rf.sendHB()
+func (rf *Raft) HB(cc CtxCancel) {
+	go rf.sendHB(cc)
 	for {
-		cc := <-rf.leaderCtx
-		go func() { rf.leaderCtx <- cc }()
-
 		timeout := timeoutCh(HeartBeatTimeout)
 
 		select {
 		case <-cc.ctx.Done():
 			return
 		case <-timeout:
-			go rf.sendHB()
+			select {
+			// it's possible that both are ready
+			case <-cc.ctx.Done():
+				return
+			default:
+				<-rf.phase.Leader
+				go rf.sendHB(cc)
+				go func() { rf.phase.Leader <- void{} }()
+			}
 		case <-rf.heartbeatTimer:
 		}
 	}

@@ -40,7 +40,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	if args.Term > term {
 		cc := <-rf.leaderCtx
 		go func() { rf.leaderCtx <- cc }()
-		go func() { rf.becomeFollower(cc) }()
+		go rf.becomeFollower(cc)
 
 		Debug(dTerm, rf.me, "<- RV from S%v, newer term:%v", args.CandidateId, args.Term)
 		go func() { rf.term <- args.Term }()
@@ -112,7 +112,7 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	if args.Term > term {
 		cc := <-rf.leaderCtx
 		go func() { rf.leaderCtx <- cc }()
-		go func() { rf.becomeFollower(cc) }()
+		go rf.becomeFollower(cc)
 
 		Debug(dTerm, rf.me, "<- AE, newer term:%v", args.Term)
 		go func() { rf.term <- args.Term }()
@@ -141,17 +141,9 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		return
 	}
 
-	select {
-	case <-rf.phase.Candidate:
-		Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
-		go func() { rf.phase.Candidate <- void{} }()
-		go func() { rf.becomeFollower(nil) }()
-	// leader with same term is not possible to receive an AE
-	case <-rf.phase.Follower:
-		Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
-		go func() { rf.phase.Follower <- void{} }()
-		go func() { rf.electionTimer <- void{} }()
-	}
+	Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
+	// this will not exit the leader phase
+	rf.becomeFollower(nil)
 
 	<-rf.voteFor
 	go func() { rf.voteFor <- args.LeaderID }()

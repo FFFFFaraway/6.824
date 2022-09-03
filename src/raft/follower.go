@@ -16,6 +16,7 @@ func (rf *Raft) becomeFollower(cc *CtxCancel) {
 		}
 	}
 
+	// ensure Leader and Candidate are stopped
 	timeout := timeoutCh(SelectTimeout)
 phase:
 	for {
