@@ -127,8 +127,6 @@ func (rf *Raft) GetState() (int, bool) {
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
-	term := <-rf.term
-	go func() { rf.term <- term }()
 	isLeader := false
 
 	timeout := timeoutCh(SelectTimeout)
@@ -138,6 +136,9 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		isLeader = true
 	case <-timeout:
 	}
+
+	term := <-rf.term
+	go func() { rf.term <- term }()
 
 	if !isLeader {
 		return index, term, isLeader
