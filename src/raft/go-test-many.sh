@@ -64,7 +64,7 @@ fi
 parallelism=128
 
 # Default to no test filtering unless otherwise specified
-test="2B"
+test="2A"
 if [ $# -gt 2 ]; then
 	test="$3"
 fi

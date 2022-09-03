@@ -37,8 +37,6 @@ type Phase struct {
 	Leader    chan void
 	Candidate chan void
 	Follower  chan void
-	// exit leader or candidate phase, become follower
-	//Exit chan void
 }
 
 type Entry struct {
@@ -56,7 +54,6 @@ const (
 	HeartBeatTimeout           = 100 * time.Millisecond
 	ElectionTimeoutStart       = 300 * time.Millisecond
 	ElectionTimeoutRandomRange = 200 // time.Millisecond
-	FollowerSleepTimeout       = 100 * time.Millisecond
 	KilledCheckTimeout         = 100 * time.Millisecond
 	ApplierSleepTimeout        = 100 * time.Millisecond
 	SelectTimeout              = 50 * time.Millisecond
@@ -179,15 +176,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			Leader:    make(chan void),
 			Candidate: make(chan void),
 			Follower:  make(chan void),
-			//Exit:      make(chan void),
 		},
-		term:      make(chan int),
-		voteFor:   make(chan int),
-		log:       make([]*Entry, 0),
-		logCh:     make(chan void),
-		applyCh:   applyCh,
-		leaderCtx: make(chan *CtxCancel),
-		//leaderCtxCh: make(chan void),
+		term:        make(chan int),
+		voteFor:     make(chan int),
+		log:         make([]*Entry, 0),
+		logCh:       make(chan void),
+		applyCh:     applyCh,
+		leaderCtx:   make(chan *CtxCancel),
 		commitIndex: make(chan int),
 		lastApplied: make(chan int),
 	}
@@ -202,7 +197,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() { rf.lastApplied <- 0 }()
 	go func() { rf.voteFor <- -1 }()
 	go func() { rf.leaderCtx <- nil }()
-	go rf.Follower()
 	go rf.applier()
 	rf.becomeFollower(nil)
 	go rf.cleaner()

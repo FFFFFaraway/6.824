@@ -33,7 +33,7 @@ phase:
 			Debug(dDrop, rf.me, "Already Follower")
 			return
 		case <-timeout:
-			Debug(dError, rf.me, "No Phase!!!")
+			Debug(dDrop, rf.me, "No Phase!!!")
 			break phase
 		}
 	}
@@ -44,18 +44,6 @@ phase:
 	term := <-rf.term
 	go func() { rf.term <- term }()
 	Debug(dPhase, rf.me, "become Follower %v", term)
-}
-
-func (rf *Raft) Follower() {
-	for {
-		<-rf.phase.Follower
-		if rf.killed() {
-			return
-		}
-		go func() { rf.phase.Follower <- void{} }()
-
-		time.Sleep(FollowerSleepTimeout)
-	}
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
@@ -85,36 +73,4 @@ func timeoutCh(t time.Duration) (done chan void) {
 		}
 	}()
 	return
-}
-
-func (rf *Raft) applier() {
-	for {
-		if rf.killed() {
-			return
-		}
-
-		commitIndex := <-rf.commitIndex
-		go func() { rf.commitIndex <- commitIndex }()
-
-		lastApplied := <-rf.lastApplied
-		go func() { rf.lastApplied <- lastApplied }()
-
-		<-rf.logCh
-		log := rf.log
-		go func() { rf.logCh <- void{} }()
-
-		cnt := 0
-		for i := lastApplied + 1; i <= commitIndex; i++ {
-			Debug(dApply, rf.me, "apply %v", i)
-			rf.applyCh <- ApplyMsg{
-				CommandValid: true,
-				Command:      log[i-1].Command,
-				CommandIndex: i,
-			}
-			cnt += 1
-		}
-		go func() { rf.lastApplied <- <-rf.lastApplied + cnt }()
-
-		time.Sleep(ApplierSleepTimeout)
-	}
 }

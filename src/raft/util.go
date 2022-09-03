@@ -58,6 +58,9 @@ func init() {
 }
 
 func Debug(topic logTopic, who int, format string, a ...interface{}) {
+	if topic == dDrop {
+		return
+	}
 	if debugVerbosity >= 1 {
 		t := time.Since(debugStart).Microseconds()
 		t /= 100

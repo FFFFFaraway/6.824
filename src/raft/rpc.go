@@ -147,15 +147,13 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	// this will not exit the leader phase
 	go rf.becomeFollower(nil)
 
-	vf := <-rf.voteFor
+	<-rf.voteFor
 	go func() { rf.voteFor <- args.LeaderID }()
-	Debug(dTerm, rf.me, "<- AE, votefor %v -> %v, same term", vf, args.LeaderID)
 
 	// Logs
 	<-rf.logCh
 	rf.log = args.Logs
 	go func() { rf.logCh <- void{} }()
-	Debug(dTerm, rf.me, "<- AE, copy logs, same term")
 
 	commitIndex := <-rf.commitIndex
 	if args.CommitIndex > commitIndex {

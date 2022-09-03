@@ -75,8 +75,8 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 	select {
 	case <-suc:
 		Debug(dElection, rf.me, "agreement success")
+		commitIndex = <-rf.commitIndex
 		go func() {
-			commitIndex = <-rf.commitIndex
 			rf.commitIndex <- commitIndex + 1
 			Debug(dApply, rf.me, "commitIndex inc %v -> %v", commitIndex, commitIndex+1)
 		}()
