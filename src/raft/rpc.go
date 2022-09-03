@@ -96,6 +96,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	vote = vote || (args.LastLogTerm == rf.log[lastLogIndex-1].Term && args.LastLogIndex >= len(log))
 
 	if !vote {
+		go func() { rf.voteFor <- vf }()
 		Debug(dVote, rf.me, "Refuse Vote -> S%v", args.CandidateId)
 		return
 	}
@@ -130,6 +131,7 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 			Debug(dApply, rf.me, "<- AE, update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 			go func() { rf.commitIndex <- args.CommitIndex }()
 		} else {
+			Debug(dApply, rf.me, "<- AE, refuse update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 			go func() { rf.commitIndex <- commitIndex }()
 		}
 		return
@@ -143,21 +145,24 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 
 	Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
 	// this will not exit the leader phase
-	rf.becomeFollower(nil)
+	go rf.becomeFollower(nil)
 
-	<-rf.voteFor
+	vf := <-rf.voteFor
 	go func() { rf.voteFor <- args.LeaderID }()
+	Debug(dTerm, rf.me, "<- AE, votefor %v -> %v, same term", vf, args.LeaderID)
 
 	// Logs
 	<-rf.logCh
 	rf.log = args.Logs
 	go func() { rf.logCh <- void{} }()
+	Debug(dTerm, rf.me, "<- AE, copy logs, same term")
 
 	commitIndex := <-rf.commitIndex
 	if args.CommitIndex > commitIndex {
 		Debug(dApply, rf.me, "<- AE, update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 		go func() { rf.commitIndex <- args.CommitIndex }()
 	} else {
+		Debug(dApply, rf.me, "<- AE, refuse update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 		go func() { rf.commitIndex <- commitIndex }()
 	}
 }
