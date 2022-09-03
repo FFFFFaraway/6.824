@@ -2,9 +2,10 @@ package raft
 
 import (
 	"context"
+	"time"
 )
 
-func (rf *Raft) startAgreement(command interface{}, index int) {
+func (rf *Raft) startAgreement() {
 	term := <-rf.term
 	go func() { rf.term <- term }()
 	Debug(dLeader, rf.me, "start agreement, term %v", term)
@@ -40,13 +41,12 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 				go func() { rf.term <- term }()
 
 				if ok {
-					select {
-					case <-cc.ctx.Done():
-						return
-					default:
-						cnt <- <-cnt + 1
-					}
+					<-rf.matchIndexCh
+					rf.matchIndex[i] = len(log)
+					go func() { rf.matchIndexCh <- void{} }()
+					cnt <- <-cnt + 1
 				}
+
 			}(i)
 		}
 	}
@@ -75,18 +75,8 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 	select {
 	case <-suc:
 		Debug(dElection, rf.me, "agreement success")
-		commitIndex = <-rf.commitIndex
-		go func() {
-			rf.commitIndex <- commitIndex + 1
-			Debug(dApply, rf.me, "commitIndex inc %v -> %v", commitIndex, commitIndex+1)
-		}()
 	case <-cc.ctx.Done():
 		Debug(dElection, rf.me, "agreement fail, exit")
-		rf.applyCh <- ApplyMsg{
-			CommandValid: false,
-			Command:      command,
-			CommandIndex: index,
-		}
 	}
 }
 
@@ -116,6 +106,12 @@ func (rf *Raft) sendHB(cc CtxCancel) {
 					return
 				}
 				go func() { rf.term <- term }()
+
+				if ok {
+					<-rf.matchIndexCh
+					rf.matchIndex[i] = len(log)
+					go func() { rf.matchIndexCh <- void{} }()
+				}
 			}(i)
 		}
 	}
@@ -132,6 +128,7 @@ func (rf *Raft) becomeLeader() {
 	go func() { rf.leaderCtx <- &cc }()
 
 	go rf.HB(cc)
+	go rf.updateCommitIndex(cc)
 
 	term := <-rf.term
 	go func() { rf.term <- term }()
@@ -158,5 +155,40 @@ func (rf *Raft) HB(cc CtxCancel) {
 			}
 		case <-rf.heartbeatTimer:
 		}
+	}
+}
+
+func (rf *Raft) updateCommitIndex(cc CtxCancel) {
+	for {
+		select {
+		case <-cc.ctx.Done():
+			return
+		default:
+			<-rf.phase.Leader
+			commitIndex := <-rf.commitIndex
+			<-rf.logCh
+			<-rf.matchIndexCh
+			term := <-rf.term
+
+			var max int
+			for max = len(rf.log); max >= commitIndex+1; max-- {
+				cnt := 0
+				for _, c := range rf.matchIndex {
+					if c >= max {
+						cnt++
+					}
+				}
+				if cnt >= len(rf.peers)/2 && rf.log[max-1].Term == term {
+					break
+				}
+			}
+			Debug(dCommit, rf.me, "update commitIndex %v -> %v", commitIndex, max)
+			go func() { rf.term <- term }()
+			go func() { rf.matchIndexCh <- void{} }()
+			go func() { rf.logCh <- void{} }()
+			go func() { rf.commitIndex <- max }()
+			go func() { rf.phase.Leader <- void{} }()
+		}
+		time.Sleep(ApplierSleepTimeout)
 	}
 }

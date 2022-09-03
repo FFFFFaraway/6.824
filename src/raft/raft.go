@@ -83,12 +83,14 @@ type Raft struct {
 	voteFor        chan int
 
 	// don't know whether there is a better way to operate logs
-	logCh       chan void
-	log         []*Entry
-	applyCh     chan ApplyMsg
-	leaderCtx   chan *CtxCancel
-	commitIndex chan int
-	lastApplied chan int
+	logCh        chan void
+	log          []*Entry
+	applyCh      chan ApplyMsg
+	leaderCtx    chan *CtxCancel
+	commitIndex  chan int
+	lastApplied  chan int
+	matchIndex   []int
+	matchIndexCh chan void
 }
 
 // GetState return currentTerm and whether this server
@@ -148,7 +150,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = len(rf.log)
 	go func() { rf.logCh <- void{} }()
 	// send to followers by AE
-	go rf.startAgreement(command, index)
+	go rf.startAgreement()
 
 	return index, term, isLeader
 }
@@ -177,14 +179,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			Candidate: make(chan void),
 			Follower:  make(chan void),
 		},
-		term:        make(chan int),
-		voteFor:     make(chan int),
-		log:         make([]*Entry, 0),
-		logCh:       make(chan void),
-		applyCh:     applyCh,
-		leaderCtx:   make(chan *CtxCancel),
-		commitIndex: make(chan int),
-		lastApplied: make(chan int),
+		term:         make(chan int),
+		voteFor:      make(chan int),
+		log:          make([]*Entry, 0),
+		logCh:        make(chan void),
+		applyCh:      applyCh,
+		leaderCtx:    make(chan *CtxCancel),
+		commitIndex:  make(chan int),
+		lastApplied:  make(chan int),
+		matchIndex:   make([]int, len(peers)),
+		matchIndexCh: make(chan void),
 	}
 
 	// initialize from state persisted before a crash
@@ -197,6 +201,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() { rf.lastApplied <- 0 }()
 	go func() { rf.voteFor <- -1 }()
 	go func() { rf.leaderCtx <- nil }()
+	go func() { rf.matchIndexCh <- void{} }()
 	go rf.applier()
 	rf.becomeFollower(nil)
 	go rf.cleaner()

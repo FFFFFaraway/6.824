@@ -20,7 +20,7 @@ func (rf *Raft) applier() {
 
 		cnt := 0
 		for i := lastApplied + 1; i <= commitIndex; i++ {
-			Debug(dApply, rf.me, "apply %v", i)
+			Debug(dApply, rf.me, "apply %v, command: %v", i, log[i-1].Command.(int))
 			rf.applyCh <- ApplyMsg{
 				CommandValid: true,
 				Command:      log[i-1].Command,
