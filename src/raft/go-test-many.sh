@@ -49,8 +49,9 @@ if ! go test -c -o tester; then
 	exit 1
 fi
 
+rm test-*
 # Default to 100 runs unless otherwise specified
-runs=8
+runs=128
 if [ $# -gt 0 ]; then
 	runs="$1"
 fi
@@ -60,10 +61,10 @@ fi
 #if [ $# -gt 1 ]; then
 #	parallelism="$2"
 #fi
-parallelism=8
+parallelism=128
 
 # Default to no test filtering unless otherwise specified
-test="2B"
+test="2A"
 if [ $# -gt 2 ]; then
 	test="$3"
 fi

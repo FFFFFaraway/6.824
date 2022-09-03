@@ -38,7 +38,7 @@ type Phase struct {
 	Candidate chan void
 	Follower  chan void
 	// exit leader or candidate phase, become follower
-	Exit chan void
+	//Exit chan void
 }
 
 type Entry struct {
@@ -46,14 +46,20 @@ type Entry struct {
 	Command interface{}
 }
 
+type CtxCancel struct {
+	ctx    context.Context
+	cancel context.CancelFunc
+}
+
 const (
 	RequestVoteTotalTimeout    = 100 * time.Millisecond
 	HeartBeatTimeout           = 100 * time.Millisecond
-	ElectionTimeoutStart       = 1000 * time.Millisecond
-	ElectionTimeoutRandomRange = 1000 // time.Millisecond
+	ElectionTimeoutStart       = 500 * time.Millisecond
+	ElectionTimeoutRandomRange = 500 // time.Millisecond
 	FollowerSleepTimeout       = 100 * time.Millisecond
 	KilledCheckTimeout         = 100 * time.Millisecond
 	ApplierSleepTimeout        = 100 * time.Millisecond
+	SelectTimeout              = 10 * time.Millisecond
 )
 
 // Raft
@@ -79,11 +85,11 @@ type Raft struct {
 	term           chan int
 	voteFor        chan int
 
-	log []*Entry
 	// don't know whether there is a better way to operate logs
 	logCh       chan void
+	log         []*Entry
 	applyCh     chan ApplyMsg
-	leaderCtx   chan context.Context
+	leaderCtx   chan *CtxCancel
 	commitIndex chan int
 	lastApplied chan int
 }
@@ -173,14 +179,14 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			Leader:    make(chan void),
 			Candidate: make(chan void),
 			Follower:  make(chan void),
-			Exit:      make(chan void),
+			//Exit:      make(chan void),
 		},
 		term:      make(chan int),
 		voteFor:   make(chan int),
 		log:       make([]*Entry, 0),
 		logCh:     make(chan void),
 		applyCh:   applyCh,
-		leaderCtx: make(chan context.Context),
+		leaderCtx: make(chan *CtxCancel),
 		//leaderCtxCh: make(chan void),
 		commitIndex: make(chan int),
 		lastApplied: make(chan int),
@@ -194,8 +200,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() { rf.logCh <- void{} }()
 	go func() { rf.commitIndex <- 0 }()
 	go func() { rf.lastApplied <- 0 }()
+	go func() { rf.voteFor <- -1 }()
+	go func() { rf.leaderCtx <- nil }()
 	go rf.Follower()
-	rf.becomeFollower()
+	go rf.applier()
+	rf.becomeFollower(nil)
 	go rf.cleaner()
 
 	return rf

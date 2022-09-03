@@ -2,7 +2,6 @@ package raft
 
 import (
 	"context"
-	"time"
 )
 
 func (rf *Raft) startAgreement(command interface{}, index int) {
@@ -19,28 +18,28 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 	need := len(rf.peers) / 2
 	suc := make(chan void)
 
+	cc := <-rf.leaderCtx
+	go func() { rf.leaderCtx <- cc }()
+
 	go func() { cnt <- 0 }()
 
 	for i := range rf.peers {
 		if i != rf.me {
 			go func(i int) {
 				reply := &AEReply{}
-				ok := rf.sendAE(i, &AEArgs{Term: term, Logs: log, CommitIndex: commitIndex}, reply)
+				ok := rf.sendAE(i, &AEArgs{Term: term, Logs: log, CommitIndex: commitIndex, LeaderID: rf.me}, reply)
 
 				term := <-rf.term
 				if ok && reply.Term > term {
 					go func() { rf.term <- reply.Term }()
-					go func() { rf.phase.Exit <- void{} }()
+					go func() { rf.becomeFollower(cc) }()
 					return
 				}
 				go func() { rf.term <- term }()
 
-				ctx := <-rf.leaderCtx
-				go func() { rf.leaderCtx <- ctx }()
-
 				if ok {
 					select {
-					case <-ctx.Done():
+					case <-cc.ctx.Done():
 						return
 					default:
 						cnt <- <-cnt + 1
@@ -53,9 +52,6 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 	// periodically check if cnt satisfy the need
 	go func() {
 		for {
-			ctx := <-rf.leaderCtx
-			go func() { rf.leaderCtx <- ctx }()
-
 			select {
 			case c := <-cnt:
 				if c >= need {
@@ -64,7 +60,7 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 				}
 				// block here wait for RV ack
 				cnt <- c
-			case <-ctx.Done():
+			case <-cc.ctx.Done():
 				return
 			}
 		}
@@ -73,20 +69,16 @@ func (rf *Raft) startAgreement(command interface{}, index int) {
 	// press the heartbeatTimer
 	go func() { rf.heartbeatTimer <- void{} }()
 
-	ctx := <-rf.leaderCtx
-	go func() { rf.leaderCtx <- ctx }()
 	// wait util exit, no timeout, no retry
 	select {
 	case <-suc:
 		Debug(dElection, rf.me, "agreement success")
-		Debug(dApply, rf.me, "apply %v", index)
-		rf.applyCh <- ApplyMsg{
-			CommandValid: true,
-			Command:      command,
-			CommandIndex: index,
-		}
-		go func() { rf.commitIndex <- <-rf.commitIndex + 1 }()
-	case <-ctx.Done():
+		go func() {
+			commitIndex = <-rf.commitIndex
+			rf.commitIndex <- commitIndex + 1
+			Debug(dApply, rf.me, "commitIndex inc %v -> %v", commitIndex, commitIndex+1)
+		}()
+	case <-cc.ctx.Done():
 		Debug(dElection, rf.me, "agreement fail, exit")
 		rf.applyCh <- ApplyMsg{
 			CommandValid: false,
@@ -101,19 +93,25 @@ func (rf *Raft) sendHB() {
 	go func() { rf.term <- term }()
 	Debug(dLeader, rf.me, "send out HB, term %v", term)
 
+	<-rf.logCh
+	log := rf.log
+	go func() { rf.logCh <- void{} }()
 	commitIndex := <-rf.commitIndex
 	go func() { rf.commitIndex <- commitIndex }()
+
+	cc := <-rf.leaderCtx
+	go func() { rf.leaderCtx <- cc }()
 
 	for i := range rf.peers {
 		if i != rf.me {
 			go func(i int) {
 				reply := &AEReply{}
-				ok := rf.sendAE(i, &AEArgs{Term: term, CommitIndex: commitIndex}, reply)
+				ok := rf.sendAE(i, &AEArgs{Term: term, Logs: log, CommitIndex: commitIndex, LeaderID: rf.me}, reply)
 
 				term := <-rf.term
 				if ok && reply.Term > term {
 					go func() { rf.term <- reply.Term }()
-					go func() { rf.phase.Exit <- void{} }()
+					go func() { rf.becomeFollower(cc) }()
 					return
 				}
 				go func() { rf.term <- term }()
@@ -123,24 +121,14 @@ func (rf *Raft) sendHB() {
 }
 
 func (rf *Raft) becomeLeader() {
-clean:
-	for {
-		select {
-		// stop candidate
-		case <-rf.phase.Candidate:
-		case <-rf.leaderCtx:
-		default:
-			break clean
-		}
-	}
-	// voteFor unchanged nothing to do
+	<-rf.phase.Candidate
 	go func() { rf.phase.Leader <- void{} }()
 
+	<-rf.leaderCtx
 	var cancel context.CancelFunc
 	ctx, cancel := context.WithCancel(context.Background())
-	go func() { rf.leaderCtx <- ctx }()
+	go func() { rf.leaderCtx <- &CtxCancel{ctx, cancel} }()
 
-	go rf.Leader(cancel)
 	go rf.HB()
 
 	term := <-rf.term
@@ -151,33 +139,17 @@ clean:
 func (rf *Raft) HB() {
 	go rf.sendHB()
 	for {
-		ctx := <-rf.leaderCtx
-		go func() { rf.leaderCtx <- ctx }()
+		cc := <-rf.leaderCtx
+		go func() { rf.leaderCtx <- cc }()
 
 		timeout := timeoutCh(HeartBeatTimeout)
 
 		select {
-		case <-ctx.Done():
+		case <-cc.ctx.Done():
 			return
 		case <-timeout:
 			go rf.sendHB()
 		case <-rf.heartbeatTimer:
-		}
-	}
-}
-
-func (rf *Raft) Leader(cancel context.CancelFunc) {
-	defer cancel()
-	for {
-		if rf.killed() {
-			return
-		}
-		select {
-		case <-rf.phase.Exit:
-			rf.becomeFollower()
-			return
-		default:
-			time.Sleep(KilledCheckTimeout)
 		}
 	}
 }

@@ -5,20 +5,39 @@ import (
 	"time"
 )
 
-func (rf *Raft) becomeFollower() {
-clean:
-	for {
+// make ensure multiple call will create only one follower
+func (rf *Raft) becomeFollower(cc *CtxCancel) {
+	if cc != nil {
 		select {
-		case <-rf.voteFor:
-		case <-rf.phase.Candidate:
-		case <-rf.phase.Leader:
+		case <-cc.ctx.Done():
+		// if not done, then call cancel
 		default:
-			break clean
+			cc.cancel()
 		}
 	}
-	go func() { rf.voteFor <- -1 }()
+
+	timeout := timeoutCh(SelectTimeout)
+phase:
+	for {
+		select {
+		case <-rf.phase.Leader:
+			Debug(dDrop, rf.me, "Leader -> Follower")
+			break phase
+		case <-rf.phase.Candidate:
+			Debug(dDrop, rf.me, "Candidate -> Follower")
+			break phase
+		case <-rf.phase.Follower:
+			go func() { rf.electionTimer <- void{} }()
+			go func() { rf.phase.Follower <- void{} }()
+			Debug(dDrop, rf.me, "Already Follower")
+			return
+		case <-timeout:
+			Debug(dError, rf.me, "No Phase!!!")
+			break phase
+		}
+	}
+
 	go rf.ticker()
-	go rf.applier()
 	go func() { rf.phase.Follower <- void{} }()
 
 	term := <-rf.term
@@ -34,11 +53,6 @@ func (rf *Raft) Follower() {
 		}
 		go func() { rf.phase.Follower <- void{} }()
 
-		select {
-		case <-rf.phase.Exit:
-			go func() { rf.electionTimer <- void{} }()
-		default:
-		}
 		time.Sleep(FollowerSleepTimeout)
 	}
 }
@@ -74,11 +88,9 @@ func timeoutCh(t time.Duration) (done chan void) {
 
 func (rf *Raft) applier() {
 	for {
-		<-rf.phase.Follower
 		if rf.killed() {
 			return
 		}
-		go func() { rf.phase.Follower <- void{} }()
 
 		commitIndex := <-rf.commitIndex
 		go func() { rf.commitIndex <- commitIndex }()
@@ -90,6 +102,7 @@ func (rf *Raft) applier() {
 		log := rf.log
 		go func() { rf.logCh <- void{} }()
 
+		cnt := 0
 		for i := lastApplied + 1; i <= commitIndex; i++ {
 			Debug(dApply, rf.me, "apply %v", i)
 			rf.applyCh <- ApplyMsg{
@@ -97,8 +110,9 @@ func (rf *Raft) applier() {
 				Command:      log[i-1].Command,
 				CommandIndex: i,
 			}
-			go func() { rf.lastApplied <- <-rf.lastApplied + 1 }()
+			cnt += 1
 		}
+		go func() { rf.lastApplied <- <-rf.lastApplied + cnt }()
 
 		time.Sleep(ApplierSleepTimeout)
 	}

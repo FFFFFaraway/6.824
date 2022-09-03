@@ -5,8 +5,10 @@ package raft
 // field names must start with capital letters!
 //
 type RequestVoteArgs struct {
-	Term        int
-	CandidateId int
+	Term         int
+	CandidateId  int
+	LastLogTerm  int
+	LastLogIndex int
 }
 
 // RequestVoteReply
@@ -22,6 +24,7 @@ type AEArgs struct {
 	Term        int
 	Logs        []*Entry
 	CommitIndex int
+	LeaderID    int
 }
 
 type AEReply struct {
@@ -35,12 +38,29 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	term := <-rf.term
 	reply.Term = term
 	if args.Term > term {
+		cc := <-rf.leaderCtx
+		go func() { rf.leaderCtx <- cc }()
+		go func() { rf.becomeFollower(cc) }()
+
 		Debug(dTerm, rf.me, "<- RV from S%v, newer term:%v", args.CandidateId, args.Term)
 		go func() { rf.term <- args.Term }()
-		go func() { rf.phase.Exit <- void{} }()
+
+		<-rf.logCh
+		log := rf.log
+		lastLogIndex := len(log)
+		go func() { rf.logCh <- void{} }()
+
+		vote := lastLogIndex == 0
+		vote = vote || args.LastLogTerm > rf.log[lastLogIndex-1].Term
+		vote = vote || (args.LastLogTerm == rf.log[lastLogIndex-1].Term && args.LastLogIndex >= len(log))
+
+		if !vote {
+			Debug(dVote, rf.me, "Refuse Vote -> S%v", args.CandidateId)
+			return
+		}
 		reply.Vote = true
-		Debug(dVote, rf.me, "Grant Vote -> S%v", args.CandidateId)
-		<-rf.voteFor
+		vf := <-rf.voteFor
+		Debug(dVote, rf.me, "Grant Vote %v -> S%v", vf, args.CandidateId)
 		go func() { rf.voteFor <- args.CandidateId }()
 		return
 	}
@@ -61,12 +81,26 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	vf := <-rf.voteFor
 	// voted for someone else
-	if vf != -1 {
+	if vf != -1 && vf != args.CandidateId {
 		go func() { rf.voteFor <- vf }()
 		return
 	}
 
-	Debug(dVote, rf.me, "Grant Vote -> S%v, Same Term", args.CandidateId)
+	<-rf.logCh
+	log := rf.log
+	lastLogIndex := len(log)
+	go func() { rf.logCh <- void{} }()
+
+	vote := lastLogIndex == 0
+	vote = vote || args.LastLogTerm > rf.log[lastLogIndex-1].Term
+	vote = vote || (args.LastLogTerm == rf.log[lastLogIndex-1].Term && args.LastLogIndex >= len(log))
+
+	if !vote {
+		Debug(dVote, rf.me, "Refuse Vote -> S%v", args.CandidateId)
+		return
+	}
+
+	Debug(dVote, rf.me, "Grant Vote %v -> S%v, Same Term", vf, args.CandidateId)
 	go func() { rf.voteFor <- args.CandidateId }()
 	reply.Vote = true
 	return
@@ -76,19 +110,24 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	term := <-rf.term
 	reply.Term = term
 	if args.Term > term {
+		cc := <-rf.leaderCtx
+		go func() { rf.leaderCtx <- cc }()
+		go func() { rf.becomeFollower(cc) }()
+
 		Debug(dTerm, rf.me, "<- AE, newer term:%v", args.Term)
 		go func() { rf.term <- args.Term }()
-		go func() { rf.phase.Exit <- void{} }()
+
+		<-rf.voteFor
+		go func() { rf.voteFor <- args.LeaderID }()
 
 		// Logs
-		if len(args.Logs) > 0 {
-			<-rf.logCh
-			rf.log = args.Logs
-			go func() { rf.logCh <- void{} }()
-		}
+		<-rf.logCh
+		rf.log = args.Logs
+		go func() { rf.logCh <- void{} }()
 
 		commitIndex := <-rf.commitIndex
 		if args.CommitIndex > commitIndex {
+			Debug(dApply, rf.me, "<- AE, update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 			go func() { rf.commitIndex <- args.CommitIndex }()
 		} else {
 			go func() { rf.commitIndex <- commitIndex }()
@@ -106,7 +145,7 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	case <-rf.phase.Candidate:
 		Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
 		go func() { rf.phase.Candidate <- void{} }()
-		go func() { rf.phase.Exit <- void{} }()
+		go func() { rf.becomeFollower(nil) }()
 	// leader with same term is not possible to receive an AE
 	case <-rf.phase.Follower:
 		Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
@@ -114,15 +153,17 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		go func() { rf.electionTimer <- void{} }()
 	}
 
+	<-rf.voteFor
+	go func() { rf.voteFor <- args.LeaderID }()
+
 	// Logs
-	if len(args.Logs) > 0 {
-		<-rf.logCh
-		rf.log = args.Logs
-		go func() { rf.logCh <- void{} }()
-	}
+	<-rf.logCh
+	rf.log = args.Logs
+	go func() { rf.logCh <- void{} }()
 
 	commitIndex := <-rf.commitIndex
 	if args.CommitIndex > commitIndex {
+		Debug(dApply, rf.me, "<- AE, update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 		go func() { rf.commitIndex <- args.CommitIndex }()
 	} else {
 		go func() { rf.commitIndex <- commitIndex }()
