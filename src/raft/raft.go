@@ -100,11 +100,12 @@ func (rf *Raft) GetState() (int, bool) {
 	go func() { rf.term <- term }()
 	isLeader := false
 
+	timeout := timeoutCh(SelectTimeout)
 	select {
 	case <-rf.phase.Leader:
 		go func() { rf.phase.Leader <- void{} }()
 		isLeader = true
-	default:
+	case <-timeout:
 	}
 
 	return term, isLeader
@@ -130,11 +131,12 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	go func() { rf.term <- term }()
 	isLeader := false
 
+	timeout := timeoutCh(SelectTimeout)
 	select {
 	case <-rf.phase.Leader:
 		go func() { rf.phase.Leader <- void{} }()
 		isLeader = true
-	default:
+	case <-timeout:
 	}
 
 	if !isLeader {
