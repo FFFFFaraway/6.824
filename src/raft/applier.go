@@ -4,8 +4,10 @@ import "time"
 
 func (rf *Raft) applier() {
 	for {
-		if rf.killed() {
+		select {
+		case <-rf.dead:
 			return
+		default:
 		}
 
 		commitIndex := <-rf.commitIndex

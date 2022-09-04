@@ -44,7 +44,12 @@ phase:
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
-	for rf.killed() == false {
+	for {
+		select {
+		case <-rf.dead:
+			return
+		default:
+		}
 		span := rand.Intn(ElectionTimeoutRandomRange)
 		timeout := timeoutCh(ElectionTimeoutStart + time.Duration(span)*time.Millisecond)
 		select {

@@ -126,10 +126,9 @@ func (rf *Raft) sendHB() {
 
 func (rf *Raft) becomeLeader() {
 	<-rf.phase.Candidate
-	go func() { rf.phase.Leader <- void{} }()
-
 	// reopen
 	rf.leaderCtx = make(chan void)
+	go func() { rf.phase.Leader <- void{} }()
 
 	go rf.HB()
 	go rf.updateCommitIndex()

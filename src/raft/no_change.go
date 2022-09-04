@@ -1,7 +1,5 @@
 package raft
 
-import "sync/atomic"
-
 //
 // this is an outline of the API that raft must expose to
 // the service (or tester). see comments below for
@@ -128,11 +126,9 @@ func (rf *Raft) sendAE(server int, args *AEArgs, reply *AEReply) bool {
 // should call killed() to check whether it should stop.
 //
 func (rf *Raft) Kill() {
-	atomic.StoreInt32(&rf.dead, 1)
-	// Your code here, if desired.
-}
-
-func (rf *Raft) killed() bool {
-	z := atomic.LoadInt32(&rf.dead)
-	return z == 1
+	select {
+	case <-rf.dead:
+	default:
+		close(rf.dead)
+	}
 }

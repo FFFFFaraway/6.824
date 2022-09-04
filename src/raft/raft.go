@@ -48,7 +48,6 @@ const (
 	HeartBeatTimeout           = 100 * time.Millisecond
 	ElectionTimeoutStart       = 300 * time.Millisecond
 	ElectionTimeoutRandomRange = 200 // time.Millisecond
-	KilledCheckTimeout         = 100 * time.Millisecond
 	ApplierSleepTimeout        = 100 * time.Millisecond
 	SelectTimeout              = 50 * time.Millisecond
 )
@@ -63,9 +62,8 @@ type Raft struct {
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
 	// me read only, no mutex need
-	me int // this peer's index into peers[]
-	// atomic
-	dead int32 // set by Kill()
+	me   int       // this peer's index into peers[]
+	dead chan void // set by Kill()
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -169,6 +167,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		peers:          peers,
 		persister:      persister,
 		me:             me,
+		dead:           make(chan void),
 		electionTimer:  make(chan void),
 		heartbeatTimer: make(chan void),
 		phase: Phase{
@@ -176,12 +175,13 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			Candidate: make(chan void),
 			Follower:  make(chan void),
 		},
-		term:         make(chan int),
-		voteFor:      make(chan int),
-		log:          make([]*Entry, 0),
-		logCh:        make(chan void),
-		applyCh:      applyCh,
-		leaderCtx:    make(chan void),
+		term:    make(chan int),
+		voteFor: make(chan int),
+		log:     make([]*Entry, 0),
+		logCh:   make(chan void),
+		applyCh: applyCh,
+		// create by leader
+		leaderCtx:    nil,
 		commitIndex:  make(chan int),
 		lastApplied:  make(chan int),
 		matchIndex:   make([]int, len(peers)),
