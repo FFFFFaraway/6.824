@@ -35,8 +35,10 @@ func (rf *Raft) cleaner() {
 				Debug(dClean, rf.me, "rf.commitIndex %v", c)
 			case l := <-rf.lastApplied:
 				Debug(dClean, rf.me, "rf.lastApplied %v", l)
+			case c := <-rf.leaderCtx:
+				Debug(dClean, rf.me, "rf.lastApplied %v", c)
+				ensureClosed(c)
 			default:
-				ensureClosed(rf.leaderCtx)
 				return
 			}
 		}

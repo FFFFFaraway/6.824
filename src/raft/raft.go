@@ -78,7 +78,7 @@ type Raft struct {
 	logCh        chan void
 	log          []*Entry
 	applyCh      chan ApplyMsg
-	leaderCtx    chan void
+	leaderCtx    chan chan void
 	commitIndex  chan int
 	lastApplied  chan int
 	matchIndex   []int
@@ -175,13 +175,12 @@ func Make(peers []*labrpc.ClientEnd, me int,
 			Candidate: make(chan void),
 			Follower:  make(chan void),
 		},
-		term:    make(chan int),
-		voteFor: make(chan int),
-		log:     make([]*Entry, 0),
-		logCh:   make(chan void),
-		applyCh: applyCh,
-		// create by leader
-		leaderCtx:    nil,
+		term:         make(chan int),
+		voteFor:      make(chan int),
+		log:          make([]*Entry, 0),
+		logCh:        make(chan void),
+		applyCh:      applyCh,
+		leaderCtx:    make(chan chan void),
 		commitIndex:  make(chan int),
 		lastApplied:  make(chan int),
 		matchIndex:   make([]int, len(peers)),
@@ -198,6 +197,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() { rf.lastApplied <- 0 }()
 	go func() { rf.voteFor <- -1 }()
 	go func() { rf.matchIndexCh <- void{} }()
+	go func() { rf.leaderCtx <- nil }()
 	go rf.applier()
 	rf.becomeFollower(false)
 	go rf.cleaner()

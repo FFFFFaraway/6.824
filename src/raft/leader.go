@@ -36,8 +36,11 @@ func (rf *Raft) startAgreement() {
 				}
 				go func() { rf.term <- term }()
 
+				done := <-rf.leaderCtx
+				go func() { rf.leaderCtx <- done }()
+
 				select {
-				case <-rf.leaderCtx:
+				case <-done:
 					return
 				default:
 				}
@@ -56,6 +59,9 @@ func (rf *Raft) startAgreement() {
 	// periodically check if cnt satisfy the need
 	go func() {
 		for {
+			done := <-rf.leaderCtx
+			go func() { rf.leaderCtx <- done }()
+
 			select {
 			case c := <-cnt:
 				if c >= need {
@@ -64,7 +70,7 @@ func (rf *Raft) startAgreement() {
 				}
 				// block here wait for RV ack
 				cnt <- c
-			case <-rf.leaderCtx:
+			case <-done:
 				return
 			}
 		}
@@ -73,11 +79,14 @@ func (rf *Raft) startAgreement() {
 	// press the heartbeatTimer
 	go func() { rf.heartbeatTimer <- void{} }()
 
+	done := <-rf.leaderCtx
+	go func() { rf.leaderCtx <- done }()
+
 	// wait util exit, no timeout, no retry
 	select {
 	case <-suc:
 		Debug(dElection, rf.me, "agreement success")
-	case <-rf.leaderCtx:
+	case <-done:
 		Debug(dElection, rf.me, "agreement fail, exit")
 	}
 }
@@ -108,8 +117,11 @@ func (rf *Raft) sendHB() {
 				}
 				go func() { rf.term <- term }()
 
+				done := <-rf.leaderCtx
+				go func() { rf.leaderCtx <- done }()
+
 				select {
-				case <-rf.leaderCtx:
+				case <-done:
 					return
 				default:
 				}
@@ -127,7 +139,8 @@ func (rf *Raft) sendHB() {
 func (rf *Raft) becomeLeader() {
 	<-rf.phase.Candidate
 	// reopen
-	rf.leaderCtx = make(chan void)
+	<-rf.leaderCtx
+	go func() { rf.leaderCtx <- make(chan void) }()
 	go func() { rf.phase.Leader <- void{} }()
 
 	go rf.HB()
@@ -143,13 +156,16 @@ func (rf *Raft) HB() {
 	for {
 		timeout := timeoutCh(HeartBeatTimeout)
 
+		done := <-rf.leaderCtx
+		go func() { rf.leaderCtx <- done }()
+
 		select {
-		case <-rf.leaderCtx:
+		case <-done:
 			return
 		case <-timeout:
 			select {
 			// it's possible that both are ready
-			case <-rf.leaderCtx:
+			case <-done:
 				return
 			default:
 				<-rf.phase.Leader
@@ -163,8 +179,11 @@ func (rf *Raft) HB() {
 
 func (rf *Raft) updateCommitIndex() {
 	for {
+		done := <-rf.leaderCtx
+		go func() { rf.leaderCtx <- done }()
+
 		select {
-		case <-rf.leaderCtx:
+		case <-done:
 			return
 		default:
 			<-rf.phase.Leader

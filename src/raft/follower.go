@@ -8,7 +8,11 @@ import (
 // make ensure multiple call will create only one follower
 func (rf *Raft) becomeFollower(exitLeader bool) {
 	if exitLeader {
-		ensureClosed(rf.leaderCtx)
+		c := <-rf.leaderCtx
+		go func() {
+			ensureClosed(c)
+			rf.leaderCtx <- c
+		}()
 	}
 
 	// ensure Leader and Candidate are stopped
