@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"context"
 	"time"
 )
 
@@ -19,9 +18,6 @@ func (rf *Raft) startAgreement() {
 	need := len(rf.peers) / 2
 	suc := make(chan void)
 
-	cc := <-rf.leaderCtx
-	go func() { rf.leaderCtx <- cc }()
-
 	go func() { cnt <- 0 }()
 
 	for i := range rf.peers {
@@ -30,15 +26,21 @@ func (rf *Raft) startAgreement() {
 				reply := &AEReply{}
 				ok := rf.sendAE(i, &AEArgs{Term: term, Logs: log, CommitIndex: commitIndex, LeaderID: rf.me}, reply)
 
+				// must use the latest term
 				term := <-rf.term
 				if ok && reply.Term > term {
 					Debug(dTerm, rf.me, "command reply, newer term:%v", reply.Term)
 					go func() { rf.term <- reply.Term }()
-					cc.cancel()
-					go rf.becomeFollower(cc)
+					go rf.becomeFollower(true)
 					return
 				}
 				go func() { rf.term <- term }()
+
+				select {
+				case <-rf.leaderCtx:
+					return
+				default:
+				}
 
 				if ok {
 					<-rf.matchIndexCh
@@ -62,7 +64,7 @@ func (rf *Raft) startAgreement() {
 				}
 				// block here wait for RV ack
 				cnt <- c
-			case <-cc.ctx.Done():
+			case <-rf.leaderCtx:
 				return
 			}
 		}
@@ -75,12 +77,12 @@ func (rf *Raft) startAgreement() {
 	select {
 	case <-suc:
 		Debug(dElection, rf.me, "agreement success")
-	case <-cc.ctx.Done():
+	case <-rf.leaderCtx:
 		Debug(dElection, rf.me, "agreement fail, exit")
 	}
 }
 
-func (rf *Raft) sendHB(cc CtxCancel) {
+func (rf *Raft) sendHB() {
 	term := <-rf.term
 	go func() { rf.term <- term }()
 	Debug(dLeader, rf.me, "send out HB, term %v", term)
@@ -101,11 +103,16 @@ func (rf *Raft) sendHB(cc CtxCancel) {
 				if ok && reply.Term > term {
 					Debug(dTerm, rf.me, "HB reply, newer term:%v", reply.Term)
 					go func() { rf.term <- reply.Term }()
-					go rf.becomeFollower(nil)
-					cc.cancel()
+					go rf.becomeFollower(true)
 					return
 				}
 				go func() { rf.term <- term }()
+
+				select {
+				case <-rf.leaderCtx:
+					return
+				default:
+				}
 
 				if ok {
 					<-rf.matchIndexCh
@@ -121,36 +128,33 @@ func (rf *Raft) becomeLeader() {
 	<-rf.phase.Candidate
 	go func() { rf.phase.Leader <- void{} }()
 
-	<-rf.leaderCtx
-	var cancel context.CancelFunc
-	ctx, cancel := context.WithCancel(context.Background())
-	cc := CtxCancel{ctx, cancel}
-	go func() { rf.leaderCtx <- &cc }()
+	// reopen
+	rf.leaderCtx = make(chan void)
 
-	go rf.HB(cc)
-	go rf.updateCommitIndex(cc)
+	go rf.HB()
+	go rf.updateCommitIndex()
 
 	term := <-rf.term
 	go func() { rf.term <- term }()
 	Debug(dPhase, rf.me, "become Leader %v", term)
 }
 
-func (rf *Raft) HB(cc CtxCancel) {
-	go rf.sendHB(cc)
+func (rf *Raft) HB() {
+	go rf.sendHB()
 	for {
 		timeout := timeoutCh(HeartBeatTimeout)
 
 		select {
-		case <-cc.ctx.Done():
+		case <-rf.leaderCtx:
 			return
 		case <-timeout:
 			select {
 			// it's possible that both are ready
-			case <-cc.ctx.Done():
+			case <-rf.leaderCtx:
 				return
 			default:
 				<-rf.phase.Leader
-				go rf.sendHB(cc)
+				go rf.sendHB()
 				go func() { rf.phase.Leader <- void{} }()
 			}
 		case <-rf.heartbeatTimer:
@@ -158,10 +162,10 @@ func (rf *Raft) HB(cc CtxCancel) {
 	}
 }
 
-func (rf *Raft) updateCommitIndex(cc CtxCancel) {
+func (rf *Raft) updateCommitIndex() {
 	for {
 		select {
-		case <-cc.ctx.Done():
+		case <-rf.leaderCtx:
 			return
 		default:
 			<-rf.phase.Leader

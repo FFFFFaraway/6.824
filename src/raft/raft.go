@@ -1,7 +1,6 @@
 package raft
 
 import (
-	"context"
 	"time"
 
 	//	"6.824/labgob"
@@ -44,11 +43,6 @@ type Entry struct {
 	Command interface{}
 }
 
-type CtxCancel struct {
-	ctx    context.Context
-	cancel context.CancelFunc
-}
-
 const (
 	RequestVoteTotalTimeout    = 100 * time.Millisecond
 	HeartBeatTimeout           = 100 * time.Millisecond
@@ -86,7 +80,7 @@ type Raft struct {
 	logCh        chan void
 	log          []*Entry
 	applyCh      chan ApplyMsg
-	leaderCtx    chan *CtxCancel
+	leaderCtx    chan void
 	commitIndex  chan int
 	lastApplied  chan int
 	matchIndex   []int
@@ -187,7 +181,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		log:          make([]*Entry, 0),
 		logCh:        make(chan void),
 		applyCh:      applyCh,
-		leaderCtx:    make(chan *CtxCancel),
+		leaderCtx:    make(chan void),
 		commitIndex:  make(chan int),
 		lastApplied:  make(chan int),
 		matchIndex:   make([]int, len(peers)),
@@ -203,10 +197,9 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() { rf.commitIndex <- 0 }()
 	go func() { rf.lastApplied <- 0 }()
 	go func() { rf.voteFor <- -1 }()
-	go func() { rf.leaderCtx <- nil }()
 	go func() { rf.matchIndexCh <- void{} }()
 	go rf.applier()
-	rf.becomeFollower(nil)
+	rf.becomeFollower(false)
 	go rf.cleaner()
 
 	return rf

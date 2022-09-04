@@ -1,7 +1,5 @@
 package raft
 
-import "context"
-
 func (rf *Raft) becomeCandidate() {
 	<-rf.phase.Follower
 	go func() { rf.phase.Candidate <- void{} }()
@@ -24,9 +22,9 @@ func (rf *Raft) sendAllRV() {
 	// whether the received vote satisfy need
 	suc := make(chan void)
 
-	var cancel context.CancelFunc
-	ctx, cancel := context.WithTimeout(context.Background(), RequestVoteTotalTimeout)
-	defer cancel()
+	timeout := timeoutCh(RequestVoteTotalTimeout)
+	done := make(chan void)
+	defer ensureClosed(done)
 
 	term := <-rf.term
 	go func() { rf.term <- term }()
@@ -54,21 +52,21 @@ func (rf *Raft) sendAllRV() {
 
 				term := <-rf.term
 				if reply.Term > term {
-					Debug(dElection, rf.me, "election fail, canceled")
 					go func() { rf.term <- reply.Term }()
-					cancel()
-					go rf.becomeFollower(nil)
+					ensureClosed(done)
+					go rf.becomeFollower(false)
 					return
 				}
 				go func() { rf.term <- term }()
 
+				select {
+				case <-done:
+					return
+				default:
+				}
+
 				if ok && reply.Vote {
-					select {
-					case <-ctx.Done():
-						return
-					default:
-						cnt <- <-cnt + 1
-					}
+					cnt <- <-cnt + 1
 				}
 			}(i)
 		}
@@ -84,7 +82,7 @@ func (rf *Raft) sendAllRV() {
 				}
 				// block here wait for RV ack
 				cnt <- c
-			case <-ctx.Done():
+			case <-done:
 				return
 			}
 		}
@@ -93,19 +91,22 @@ func (rf *Raft) sendAllRV() {
 	select {
 	case <-suc:
 		select {
-		// it's possible that the suc channel and the cancel are both ready
-		case <-ctx.Done():
-			Debug(dElection, rf.me, "election fail, canceled or timeout")
-			// election fail, continue being follower
-			go rf.becomeFollower(nil)
+		case <-done:
+			Debug(dElection, rf.me, "election fail, canceled")
+			go rf.becomeFollower(false)
+		case <-timeout:
+			Debug(dElection, rf.me, "election fail, timeout")
+			go rf.becomeFollower(false)
 		default:
 			Debug(dElection, rf.me, "election success")
-			// must use go to call the cancel func quickly
+			// must use add go to call the cancel func quickly
 			go rf.becomeLeader()
 		}
-	case <-ctx.Done():
-		Debug(dElection, rf.me, "election fail, canceled or timeout")
-		// election fail, continue being follower
-		go rf.becomeFollower(nil)
+	case <-done:
+		Debug(dElection, rf.me, "election fail, canceled")
+		go rf.becomeFollower(false)
+	case <-timeout:
+		Debug(dElection, rf.me, "election fail, timeout")
+		go rf.becomeFollower(false)
 	}
 }

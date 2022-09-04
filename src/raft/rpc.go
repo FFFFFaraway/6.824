@@ -38,9 +38,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	term := <-rf.term
 	reply.Term = term
 	if args.Term > term {
-		cc := <-rf.leaderCtx
-		go func() { rf.leaderCtx <- cc }()
-		go rf.becomeFollower(cc)
+		go rf.becomeFollower(true)
 
 		Debug(dTerm, rf.me, "<- RV from S%v, newer term:%v", args.CandidateId, args.Term)
 		go func() { rf.term <- args.Term }()
@@ -111,9 +109,7 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	term := <-rf.term
 	reply.Term = term
 	if args.Term > term {
-		cc := <-rf.leaderCtx
-		go func() { rf.leaderCtx <- cc }()
-		go rf.becomeFollower(cc)
+		go rf.becomeFollower(true)
 
 		Debug(dTerm, rf.me, "<- AE, newer term:%v", args.Term)
 		go func() { rf.term <- args.Term }()
@@ -145,7 +141,7 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 
 	Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
 	// this will not exit the leader phase
-	go rf.becomeFollower(nil)
+	go rf.becomeFollower(false)
 
 	<-rf.voteFor
 	go func() { rf.voteFor <- args.LeaderID }()

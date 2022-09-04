@@ -6,14 +6,9 @@ import (
 )
 
 // make ensure multiple call will create only one follower
-func (rf *Raft) becomeFollower(cc *CtxCancel) {
-	if cc != nil {
-		select {
-		case <-cc.ctx.Done():
-		// if not done, then call cancel
-		default:
-			cc.cancel()
-		}
+func (rf *Raft) becomeFollower(exitLeader bool) {
+	if exitLeader {
+		ensureClosed(rf.leaderCtx)
 	}
 
 	// ensure Leader and Candidate are stopped

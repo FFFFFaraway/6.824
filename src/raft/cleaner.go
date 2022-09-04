@@ -4,6 +4,16 @@ import (
 	"time"
 )
 
+func ensureClosed(ch chan void) {
+	if ch != nil {
+		select {
+		case <-ch:
+		default:
+			close(ch)
+		}
+	}
+}
+
 func (rf *Raft) cleaner() {
 	for {
 		if rf.killed() {
@@ -26,8 +36,6 @@ func (rf *Raft) cleaner() {
 					Debug(dClean, rf.me, "rf.voteFor %v", vf)
 				case <-rf.logCh:
 					Debug(dClean, rf.me, "rf.logCh")
-				case cc := <-rf.leaderCtx:
-					Debug(dClean, rf.me, "rf.leaderCtx %v", cc)
 				case c := <-rf.commitIndex:
 					Debug(dClean, rf.me, "rf.commitIndex %v", c)
 				case l := <-rf.lastApplied:
