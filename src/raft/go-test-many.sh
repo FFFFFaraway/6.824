@@ -109,7 +109,7 @@ cleanup() {
 	for pid in "${waits[@]}"; do
 		kill "$pid"
 		wait "$pid"
-		rm -rf "test-${is[0]}.err" "test-${is[0]}.log"
+#		rm -rf "test-${is[0]}.err" "test-${is[0]}.log"
 		is=("${is[@]:1}")
 	done
 	exit 0
