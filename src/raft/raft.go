@@ -118,6 +118,7 @@ func (rf *Raft) GetState() (int, bool) {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
+	Debug(dDrop, rf.me, "Start a command")
 	index := -1
 	isLeader := false
 
@@ -136,6 +137,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return index, term, isLeader
 	}
 
+	Debug(dDrop, rf.me, "Append Log with Term")
 	// append entry to log
 	<-rf.logCh
 	rf.log = append(rf.log, &Entry{

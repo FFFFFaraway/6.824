@@ -49,8 +49,12 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		go func() { rf.logCh <- void{} }()
 
 		vote := lastLogIndex == 0
-		vote = vote || args.LastLogTerm > rf.log[lastLogIndex-1].Term
-		vote = vote || (args.LastLogTerm == rf.log[lastLogIndex-1].Term && args.LastLogIndex >= len(log))
+		vote = vote || args.LastLogTerm > log[lastLogIndex-1].Term
+		vote = vote || (args.LastLogTerm == log[lastLogIndex-1].Term && args.LastLogIndex >= lastLogIndex)
+
+		if lastLogIndex > 0 {
+			Debug(dDrop, rf.me, "args LastTerm: %v, me LastTerm: %v, vote: %v", args.LastLogTerm, log[lastLogIndex-1].Term, vote)
+		}
 
 		if !vote {
 			Debug(dVote, rf.me, "Refuse Vote -> S%v", args.CandidateId)
