@@ -4,94 +4,68 @@ import (
 	"time"
 )
 
-func (rf *Raft) startAgreement() {
-	term := <-rf.term
-	go func() { rf.term <- term }()
-	Debug(dLeader, rf.me, "start agreement, term %v", term)
-	<-rf.logCh
-	log := rf.log
-	go func() { rf.logCh <- void{} }()
-	commitIndex := <-rf.commitIndex
-	go func() { rf.commitIndex <- commitIndex }()
+func (rf *Raft) sendOneHB(oldLog []*Entry, i, oldTerm, commitIndex int) {
 
-	cnt := make(chan int)
-	need := len(rf.peers) / 2
-	suc := make(chan void)
+	<-rf.nextIndexCh
+	startIndex := rf.nextIndex[i]
+	go func() { rf.nextIndexCh <- void{} }()
 
-	go func() { cnt <- 0 }()
-
-	for i := range rf.peers {
-		if i != rf.me {
-			go func(i int) {
-				reply := &AEReply{}
-				ok := rf.sendAE(i, &AEArgs{Term: term, Logs: log, CommitIndex: commitIndex, LeaderID: rf.me}, reply)
-
-				// must use the latest term
-				term := <-rf.term
-				if ok && reply.Term > term {
-					Debug(dTerm, rf.me, "command reply, newer term:%v", reply.Term)
-					go func() { rf.term <- reply.Term }()
-					rf.becomeFollower()
-					return
-				}
-				go func() { rf.term <- term }()
-
-				done := <-rf.leaderCtx
-				go func() { rf.leaderCtx <- done }()
-
-				select {
-				case <-done:
-					return
-				default:
-				}
-
-				if ok {
-					<-rf.matchIndexCh
-					rf.matchIndex[i] = len(log)
-					go func() { rf.matchIndexCh <- void{} }()
-					cnt <- <-cnt + 1
-				}
-
-			}(i)
-		}
+	prevLogTerm := 0
+	if startIndex != 1 {
+		// prev: -1, index to log index: -1 again
+		prevLogTerm = oldLog[startIndex-2].Term
 	}
+	reply := &AEReply{}
+	ok := rf.sendAE(i, &AEArgs{
+		Term:         oldTerm,
+		Logs:         oldLog[startIndex-1:],
+		CommitIndex:  commitIndex,
+		LeaderID:     rf.me,
+		PrevLogIndex: startIndex - 1,
+		PrevLogTerm:  prevLogTerm,
+	}, reply)
 
-	// periodically check if cnt satisfy the need
-	go func() {
-		for {
-			done := <-rf.leaderCtx
-			go func() { rf.leaderCtx <- done }()
-
-			select {
-			case c := <-cnt:
-				if c >= need {
-					suc <- void{}
-					return
-				}
-				// block here wait for RV ack
-				cnt <- c
-			case <-done:
-				return
-			}
-		}
-	}()
-
-	// press the heartbeatTimer
-	go func() { rf.heartbeatTimer <- void{} }()
+	// must use the latest term
+	term := <-rf.term
+	if ok && reply.Term > term {
+		Debug(dTerm, rf.me, "command reply, newer term:%v", reply.Term)
+		go func() { rf.term <- reply.Term }()
+		rf.becomeFollower()
+		return
+	}
+	go func() { rf.term <- term }()
 
 	done := <-rf.leaderCtx
 	go func() { rf.leaderCtx <- done }()
 
-	// wait util exit, no timeout, no retry
 	select {
-	case <-suc:
-		Debug(dElection, rf.me, "agreement success")
 	case <-done:
-		Debug(dElection, rf.me, "agreement fail, exit")
+		return
+	default:
+	}
+
+	<-rf.logCh
+	log := rf.log
+	go func() { rf.logCh <- void{} }()
+
+	if ok {
+		if reply.Success {
+			<-rf.matchIndexCh
+			rf.matchIndex[i] = len(oldLog)
+			go func() { rf.matchIndexCh <- void{} }()
+			<-rf.nextIndexCh
+			rf.nextIndex[i] = len(log) + 1
+			go func() { rf.nextIndexCh <- void{} }()
+		} else {
+			<-rf.nextIndexCh
+			rf.nextIndex[i] -= 1
+			go func() { rf.nextIndexCh <- void{} }()
+			rf.sendOneHB(oldLog, i, oldTerm, commitIndex)
+		}
 	}
 }
 
-func (rf *Raft) sendHB() {
+func (rf *Raft) sendAllHB() {
 	done := <-rf.leaderCtx
 	go func() { rf.leaderCtx <- done }()
 
@@ -113,34 +87,7 @@ func (rf *Raft) sendHB() {
 
 	for i := range rf.peers {
 		if i != rf.me {
-			go func(i int) {
-				reply := &AEReply{}
-				ok := rf.sendAE(i, &AEArgs{Term: term, Logs: log, CommitIndex: commitIndex, LeaderID: rf.me}, reply)
-
-				term := <-rf.term
-				if ok && reply.Term > term {
-					Debug(dTerm, rf.me, "HB reply, newer term:%v", reply.Term)
-					go func() { rf.term <- reply.Term }()
-					rf.becomeFollower()
-					return
-				}
-				go func() { rf.term <- term }()
-
-				done := <-rf.leaderCtx
-				go func() { rf.leaderCtx <- done }()
-
-				select {
-				case <-done:
-					return
-				default:
-				}
-
-				if ok {
-					<-rf.matchIndexCh
-					rf.matchIndex[i] = len(log)
-					go func() { rf.matchIndexCh <- void{} }()
-				}
-			}(i)
+			go rf.sendOneHB(log, i, term, commitIndex)
 		}
 	}
 }
@@ -168,7 +115,24 @@ func (rf *Raft) becomeLeader() {
 		return
 	}
 
-	go rf.HB()
+	<-rf.matchIndexCh
+	for i := range rf.matchIndex {
+		rf.matchIndex[i] = 0
+	}
+	go func() { rf.matchIndexCh <- void{} }()
+
+	<-rf.logCh
+	lastLogIndex := len(rf.log)
+	go func() { rf.logCh <- void{} }()
+
+	<-rf.nextIndexCh
+	rf.nextIndex = make([]int, len(rf.peers))
+	for i := range rf.nextIndex {
+		rf.nextIndex[i] = lastLogIndex + 1
+	}
+	go func() { rf.nextIndexCh <- void{} }()
+
+	go rf.HeartBeatLoop()
 	go rf.updateCommitIndex()
 
 	term := <-rf.term
@@ -176,8 +140,8 @@ func (rf *Raft) becomeLeader() {
 	Debug(dPhase, rf.me, "become Leader %v", term)
 }
 
-func (rf *Raft) HB() {
-	go rf.sendHB()
+func (rf *Raft) HeartBeatLoop() {
+	go rf.sendAllHB()
 	for {
 		timeout := timeoutCh(HeartBeatTimeout)
 
@@ -188,7 +152,7 @@ func (rf *Raft) HB() {
 		case <-done:
 			return
 		case <-timeout:
-			go rf.sendHB()
+			go rf.sendAllHB()
 		case <-rf.heartbeatTimer:
 		}
 	}

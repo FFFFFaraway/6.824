@@ -25,10 +25,14 @@ type AEArgs struct {
 	Logs        []*Entry
 	CommitIndex int
 	LeaderID    int
+	// copy log
+	PrevLogIndex int
+	PrevLogTerm  int
 }
 
 type AEReply struct {
-	Term int
+	Term    int
+	Success bool
 }
 
 // RequestVote
@@ -117,15 +121,20 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 
 		// Logs
 		<-rf.logCh
-		rf.log = args.Logs
+		if len(rf.log) >= args.PrevLogIndex {
+			if args.PrevLogIndex == 0 || rf.log[args.PrevLogIndex-1].Term == args.PrevLogTerm {
+				rf.log = append(rf.log[:args.PrevLogIndex], args.Logs...)
+				reply.Success = true
+			}
+		}
 		go func() { rf.logCh <- void{} }()
 
 		commitIndex := <-rf.commitIndex
-		if args.CommitIndex > commitIndex {
+		if reply.Success && args.CommitIndex > commitIndex {
 			Debug(dApply, rf.me, "<- AE, update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 			go func() { rf.commitIndex <- args.CommitIndex }()
 		} else {
-			Debug(dApply, rf.me, "<- AE, refuse update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
+			Debug(dDrop, rf.me, "<- AE, refuse update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 			go func() { rf.commitIndex <- commitIndex }()
 		}
 		return
@@ -146,11 +155,16 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 
 	// Logs
 	<-rf.logCh
-	rf.log = args.Logs
+	if len(rf.log) >= args.PrevLogIndex {
+		if args.PrevLogIndex == 0 || rf.log[args.PrevLogIndex-1].Term == args.PrevLogTerm {
+			rf.log = append(rf.log[:args.PrevLogIndex], args.Logs...)
+			reply.Success = true
+		}
+	}
 	go func() { rf.logCh <- void{} }()
 
 	commitIndex := <-rf.commitIndex
-	if args.CommitIndex > commitIndex {
+	if reply.Success && args.CommitIndex > commitIndex {
 		Debug(dApply, rf.me, "<- AE, update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 		go func() { rf.commitIndex <- args.CommitIndex }()
 	} else {

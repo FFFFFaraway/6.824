@@ -41,7 +41,7 @@ const (
 	RequestVoteTotalTimeout    = 100 * time.Millisecond
 	HeartBeatTimeout           = 100 * time.Millisecond
 	ElectionTimeoutStart       = 300 * time.Millisecond
-	ElectionTimeoutRandomRange = 200 // time.Millisecond
+	ElectionTimeoutRandomRange = 300 // time.Millisecond
 	ApplierSleepTimeout        = 100 * time.Millisecond
 )
 
@@ -77,6 +77,8 @@ type Raft struct {
 	lastApplied  chan int
 	matchIndex   []int
 	matchIndexCh chan void
+	nextIndex    []int
+	nextIndexCh  chan void
 }
 
 // Kill
@@ -150,7 +152,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return index, term, isLeader
 	}
 
-	Debug(dDrop, rf.me, "Append Log with Term")
+	Debug(dLog, rf.me, "Append Log with Term %v", term)
 	// append entry to log
 	<-rf.logCh
 	rf.log = append(rf.log, &Entry{
@@ -159,8 +161,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	})
 	index = len(rf.log)
 	go func() { rf.logCh <- void{} }()
-	// send to followers by AE
-	go rf.startAgreement()
 
 	return index, term, isLeader
 }
@@ -197,6 +197,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		lastApplied:    make(chan int),
 		matchIndex:     make([]int, len(peers)),
 		matchIndexCh:   make(chan void),
+		nextIndex:      make([]int, len(peers)),
+		nextIndexCh:    make(chan void),
 	}
 
 	// initialize from state persisted before a crash
@@ -209,6 +211,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() { rf.lastApplied <- 0 }()
 	go func() { rf.voteFor <- -1 }()
 	go func() { rf.matchIndexCh <- void{} }()
+	go func() { rf.nextIndexCh <- void{} }()
 	go func() {
 		c := make(chan void)
 		ensureClosed(c)
