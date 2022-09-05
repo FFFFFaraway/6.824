@@ -31,8 +31,15 @@ type AEArgs struct {
 }
 
 type AEReply struct {
-	Term    int
+	Term int
+	// copy log
 	Success bool
+	// conflict position, follower log term
+	XTerm int
+	// pre XTerm last log entry index
+	XIndex int
+	// follower log len or last index
+	XLen int
 }
 
 // RequestVote
@@ -45,7 +52,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		go func() { rf.term <- term }()
 		return
 	}
-	go func() { rf.term <- args.Term }()
 
 	// grant vote restriction
 	<-rf.logCh
@@ -60,8 +66,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	vf := <-rf.voteFor
 	if args.Term > term {
 		Debug(dTerm, rf.me, "<- RV from S%v, newer term:%v", args.CandidateId, args.Term)
+		go func() { rf.term <- args.Term }()
 		rf.becomeFollower()
 	} else {
+		go func() { rf.term <- args.Term }()
 		Debug(dTerm, rf.me, "<- RV from S%v, same term:%v", args.CandidateId, args.Term)
 		go func() { rf.electionTimer <- void{} }()
 		// voted for someone else
@@ -103,10 +111,25 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	// Logs
 	<-rf.logCh
 	if len(rf.log) >= args.PrevLogIndex {
-		if args.PrevLogIndex == 0 || rf.log[args.PrevLogIndex-1].Term == args.PrevLogTerm {
+		if args.PrevLogIndex == 0 {
+			rf.log = args.Logs
+			reply.Success = true
+		} else if rf.log[args.PrevLogIndex-1].Term == args.PrevLogTerm {
 			rf.log = append(rf.log[:args.PrevLogIndex], args.Logs...)
 			reply.Success = true
+		} else {
+			reply.XTerm = rf.log[args.PrevLogIndex-1].Term
+			reply.XIndex = 0
+			for i := args.PrevLogIndex; i >= 1; i-- {
+				if rf.log[i-1].Term != reply.XTerm {
+					reply.XIndex = i
+					break
+				}
+			}
 		}
+	} else {
+		reply.XTerm = -1
+		reply.XLen = len(rf.log)
 	}
 	go func() { rf.logCh <- void{} }()
 

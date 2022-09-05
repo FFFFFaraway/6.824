@@ -61,10 +61,9 @@ type Raft struct {
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
 	// state a Raft server must maintain.
-	electionTimer  chan void
-	heartbeatTimer chan void
-	term           chan int
-	voteFor        chan int
+	electionTimer chan void
+	term          chan int
+	voteFor       chan int
 
 	// don't know whether there is a better way to operate logs
 	logCh        chan void
@@ -179,26 +178,25 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{
-		peers:          peers,
-		persister:      persister,
-		me:             me,
-		dead:           make(chan void),
-		electionTimer:  make(chan void),
-		heartbeatTimer: make(chan void),
-		term:           make(chan int),
-		voteFor:        make(chan int),
-		log:            make([]*Entry, 0),
-		logCh:          make(chan void),
-		applyCh:        applyCh,
-		leaderCtx:      make(chan chan void),
-		candidateCtx:   make(chan chan void),
-		followerCtx:    make(chan chan void),
-		commitIndex:    make(chan int),
-		lastApplied:    make(chan int),
-		matchIndex:     make([]int, len(peers)),
-		matchIndexCh:   make(chan void),
-		nextIndex:      make([]int, len(peers)),
-		nextIndexCh:    make(chan void),
+		peers:         peers,
+		persister:     persister,
+		me:            me,
+		dead:          make(chan void),
+		electionTimer: make(chan void),
+		term:          make(chan int),
+		voteFor:       make(chan int),
+		log:           make([]*Entry, 0),
+		logCh:         make(chan void),
+		applyCh:       applyCh,
+		leaderCtx:     make(chan chan void),
+		candidateCtx:  make(chan chan void),
+		followerCtx:   make(chan chan void),
+		commitIndex:   make(chan int),
+		lastApplied:   make(chan int),
+		matchIndex:    make([]int, len(peers)),
+		matchIndexCh:  make(chan void),
+		nextIndex:     make([]int, len(peers)),
+		nextIndexCh:   make(chan void),
 	}
 
 	// initialize from state persisted before a crash

@@ -15,8 +15,6 @@ func (rf *Raft) cleaner() {
 	case <-rf.dead:
 		for {
 			select {
-			case <-rf.heartbeatTimer:
-				Debug(dClean, rf.me, "rf.heartbeatTimer")
 			case <-rf.electionTimer:
 				Debug(dClean, rf.me, "rf.electionTimer")
 			case t := <-rf.term:

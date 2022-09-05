@@ -10,6 +10,16 @@ func (rf *Raft) sendOneHB(oldLog []*Entry, i, oldTerm, commitIndex int) {
 	startIndex := rf.nextIndex[i]
 	go func() { rf.nextIndexCh <- void{} }()
 
+	// before send check once more
+	leaderDone := <-rf.leaderCtx
+	go func() { rf.leaderCtx <- leaderDone }()
+
+	select {
+	case <-leaderDone:
+		return
+	default:
+	}
+
 	prevLogTerm := 0
 	if startIndex != 1 {
 		// prev: -1, index to log index: -1 again
@@ -57,24 +67,32 @@ func (rf *Raft) sendOneHB(oldLog []*Entry, i, oldTerm, commitIndex int) {
 			rf.nextIndex[i] = len(log) + 1
 			go func() { rf.nextIndexCh <- void{} }()
 		} else {
+			<-rf.logCh
 			<-rf.nextIndexCh
-			rf.nextIndex[i] -= 1
+			if reply.XTerm == -1 {
+				rf.nextIndex[i] = reply.XLen + 1
+			} else {
+				tailIndex := -1
+				for index := rf.nextIndex[i] - 1; index >= 1 && rf.log[index-1].Term > reply.XTerm; index-- {
+					if rf.log[index-1].Term == reply.XTerm {
+						tailIndex = index
+						break
+					}
+				}
+				if tailIndex != -1 {
+					rf.nextIndex[i] = tailIndex + 1
+				} else {
+					rf.nextIndex[i] = reply.XIndex + 1
+				}
+			}
 			go func() { rf.nextIndexCh <- void{} }()
+			go func() { rf.logCh <- void{} }()
 			rf.sendOneHB(oldLog, i, oldTerm, commitIndex)
 		}
 	}
 }
 
 func (rf *Raft) sendAllHB() {
-	done := <-rf.leaderCtx
-	go func() { rf.leaderCtx <- done }()
-
-	select {
-	case <-done:
-		return
-	default:
-	}
-
 	term := <-rf.term
 	go func() { rf.term <- term }()
 	Debug(dLeader, rf.me, "send out HB, term %v", term)
@@ -153,7 +171,6 @@ func (rf *Raft) HeartBeatLoop() {
 			return
 		case <-timeout:
 			go rf.sendAllHB()
-		case <-rf.heartbeatTimer:
 		}
 	}
 }
