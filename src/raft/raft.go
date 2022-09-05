@@ -32,12 +32,6 @@ type ApplyMsg struct {
 
 type void struct{}
 
-type Phase struct {
-	Leader    chan void
-	Candidate chan void
-	Follower  chan void
-}
-
 type Entry struct {
 	Term    int
 	Command interface{}
@@ -70,7 +64,6 @@ type Raft struct {
 	// state a Raft server must maintain.
 	electionTimer  chan void
 	heartbeatTimer chan void
-	phase          Phase
 	term           chan int
 	voteFor        chan int
 
@@ -79,6 +72,8 @@ type Raft struct {
 	log          []*Entry
 	applyCh      chan ApplyMsg
 	leaderCtx    chan chan void
+	candidateCtx chan chan void
+	followerCtx  chan chan void
 	commitIndex  chan int
 	lastApplied  chan int
 	matchIndex   []int
@@ -92,13 +87,13 @@ func (rf *Raft) GetState() (int, bool) {
 	go func() { rf.term <- term }()
 	isLeader := false
 
-	timeout := timeoutCh(SelectTimeout)
+	done := <-rf.leaderCtx
 	select {
-	case <-rf.phase.Leader:
-		go func() { rf.phase.Leader <- void{} }()
+	case <-done:
+	default:
 		isLeader = true
-	case <-timeout:
 	}
+	go func() { rf.leaderCtx <- done }()
 
 	return term, isLeader
 }
@@ -122,13 +117,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	isLeader := false
 
-	timeout := timeoutCh(SelectTimeout)
+	done := <-rf.leaderCtx
 	select {
-	case <-rf.phase.Leader:
-		go func() { rf.phase.Leader <- void{} }()
+	case <-done:
+	default:
 		isLeader = true
-	case <-timeout:
 	}
+	go func() { rf.leaderCtx <- done }()
 
 	term := <-rf.term
 	go func() { rf.term <- term }()
@@ -172,21 +167,18 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		dead:           make(chan void),
 		electionTimer:  make(chan void),
 		heartbeatTimer: make(chan void),
-		phase: Phase{
-			Leader:    make(chan void),
-			Candidate: make(chan void),
-			Follower:  make(chan void),
-		},
-		term:         make(chan int),
-		voteFor:      make(chan int),
-		log:          make([]*Entry, 0),
-		logCh:        make(chan void),
-		applyCh:      applyCh,
-		leaderCtx:    make(chan chan void),
-		commitIndex:  make(chan int),
-		lastApplied:  make(chan int),
-		matchIndex:   make([]int, len(peers)),
-		matchIndexCh: make(chan void),
+		term:           make(chan int),
+		voteFor:        make(chan int),
+		log:            make([]*Entry, 0),
+		logCh:          make(chan void),
+		applyCh:        applyCh,
+		leaderCtx:      make(chan chan void),
+		candidateCtx:   make(chan chan void),
+		followerCtx:    make(chan chan void),
+		commitIndex:    make(chan int),
+		lastApplied:    make(chan int),
+		matchIndex:     make([]int, len(peers)),
+		matchIndexCh:   make(chan void),
 	}
 
 	// initialize from state persisted before a crash
@@ -199,9 +191,23 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() { rf.lastApplied <- 0 }()
 	go func() { rf.voteFor <- -1 }()
 	go func() { rf.matchIndexCh <- void{} }()
-	go func() { rf.leaderCtx <- nil }()
+	go func() {
+		c := make(chan void)
+		ensureClosed(c)
+		rf.leaderCtx <- c
+	}()
+	go func() {
+		c := make(chan void)
+		ensureClosed(c)
+		rf.candidateCtx <- c
+	}()
+	go func() {
+		c := make(chan void)
+		ensureClosed(c)
+		rf.followerCtx <- c
+	}()
 	go rf.applier()
-	rf.becomeFollower(false)
+	rf.becomeFollower()
 	go rf.cleaner()
 
 	return rf

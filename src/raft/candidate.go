@@ -1,17 +1,36 @@
 package raft
 
 func (rf *Raft) becomeCandidate() {
-	<-rf.phase.Follower
-	go func() { rf.phase.Candidate <- void{} }()
-	// leader vote for self
-	<-rf.voteFor
-	go func() { rf.voteFor <- rf.me }()
+	leaderCtx := <-rf.leaderCtx
+	go func() {
+		ensureClosed(leaderCtx)
+		rf.leaderCtx <- leaderCtx
+	}()
+	followerCtx := <-rf.followerCtx
+	go func() {
+		ensureClosed(followerCtx)
+		rf.followerCtx <- followerCtx
+	}()
 
-	term := <-rf.term
-	go func() { rf.term <- term + 1 }()
-	Debug(dPhase, rf.me, "become Candidate %v", term+1)
+	// ensure the candidateCtx is alive
+	done := <-rf.candidateCtx
+	select {
+	case <-done:
+		go func() { rf.candidateCtx <- make(chan void) }()
 
-	rf.sendAllRV()
+		// leader vote for self
+		<-rf.voteFor
+		go func() { rf.voteFor <- rf.me }()
+
+		term := <-rf.term
+		go func() { rf.term <- term + 1 }()
+		Debug(dPhase, rf.me, "become Candidate %v", term+1)
+
+		rf.sendAllRV()
+	default:
+		go func() { rf.candidateCtx <- done }()
+		Debug(dError, rf.me, "Already Candidate!!!")
+	}
 }
 
 func (rf *Raft) sendAllRV() {
@@ -23,8 +42,6 @@ func (rf *Raft) sendAllRV() {
 	suc := make(chan void)
 
 	timeout := timeoutCh(RequestVoteTotalTimeout)
-	done := make(chan void)
-	defer ensureClosed(done)
 
 	term := <-rf.term
 	go func() { rf.term <- term }()
@@ -53,12 +70,13 @@ func (rf *Raft) sendAllRV() {
 				term := <-rf.term
 				if reply.Term > term {
 					go func() { rf.term <- reply.Term }()
-					ensureClosed(done)
-					go rf.becomeFollower(false)
+					rf.becomeFollower()
 					return
 				}
 				go func() { rf.term <- term }()
 
+				done := <-rf.candidateCtx
+				go func() { rf.candidateCtx <- done }()
 				select {
 				case <-done:
 					return
@@ -74,6 +92,8 @@ func (rf *Raft) sendAllRV() {
 	// periodically check if cnt satisfy the need
 	go func() {
 		for {
+			done := <-rf.candidateCtx
+			go func() { rf.candidateCtx <- done }()
 			select {
 			case c := <-cnt:
 				if c >= need {
@@ -88,25 +108,27 @@ func (rf *Raft) sendAllRV() {
 		}
 	}()
 
+	done := <-rf.candidateCtx
+	go func() { rf.candidateCtx <- done }()
 	select {
 	case <-suc:
 		select {
 		case <-done:
 			Debug(dElection, rf.me, "election fail, canceled")
-			go rf.becomeFollower(false)
+			rf.becomeFollower()
 		case <-timeout:
 			Debug(dElection, rf.me, "election fail, timeout")
-			go rf.becomeFollower(false)
+			rf.becomeFollower()
 		default:
 			Debug(dElection, rf.me, "election success")
 			// must use add go to call the cancel func quickly
-			go rf.becomeLeader()
+			rf.becomeLeader()
 		}
 	case <-done:
 		Debug(dElection, rf.me, "election fail, canceled")
-		go rf.becomeFollower(false)
+		rf.becomeFollower()
 	case <-timeout:
 		Debug(dElection, rf.me, "election fail, timeout")
-		go rf.becomeFollower(false)
+		rf.becomeFollower()
 	}
 }

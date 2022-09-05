@@ -19,12 +19,6 @@ func (rf *Raft) cleaner() {
 				Debug(dClean, rf.me, "rf.heartbeatTimer")
 			case <-rf.electionTimer:
 				Debug(dClean, rf.me, "rf.electionTimer")
-			case <-rf.phase.Leader:
-				Debug(dClean, rf.me, "rf.phase.Leader")
-			case <-rf.phase.Candidate:
-				Debug(dClean, rf.me, "rf.phase.Candidate")
-			case <-rf.phase.Follower:
-				Debug(dClean, rf.me, "rf.phase.Follower")
 			case t := <-rf.term:
 				Debug(dClean, rf.me, "rf.term %v", t)
 			case vf := <-rf.voteFor:
@@ -36,7 +30,13 @@ func (rf *Raft) cleaner() {
 			case l := <-rf.lastApplied:
 				Debug(dClean, rf.me, "rf.lastApplied %v", l)
 			case c := <-rf.leaderCtx:
-				Debug(dClean, rf.me, "rf.lastApplied %v", c)
+				Debug(dClean, rf.me, "rf.leaderCtx %v", c)
+				ensureClosed(c)
+			case c := <-rf.candidateCtx:
+				Debug(dClean, rf.me, "rf.candidateCtx %v", c)
+				ensureClosed(c)
+			case c := <-rf.followerCtx:
+				Debug(dClean, rf.me, "rf.followerCtx %v", c)
 				ensureClosed(c)
 			default:
 				return

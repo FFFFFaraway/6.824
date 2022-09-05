@@ -31,7 +31,7 @@ func (rf *Raft) startAgreement() {
 				if ok && reply.Term > term {
 					Debug(dTerm, rf.me, "command reply, newer term:%v", reply.Term)
 					go func() { rf.term <- reply.Term }()
-					go rf.becomeFollower(true)
+					rf.becomeFollower()
 					return
 				}
 				go func() { rf.term <- term }()
@@ -92,6 +92,15 @@ func (rf *Raft) startAgreement() {
 }
 
 func (rf *Raft) sendHB() {
+	done := <-rf.leaderCtx
+	go func() { rf.leaderCtx <- done }()
+
+	select {
+	case <-done:
+		return
+	default:
+	}
+
 	term := <-rf.term
 	go func() { rf.term <- term }()
 	Debug(dLeader, rf.me, "send out HB, term %v", term)
@@ -112,7 +121,7 @@ func (rf *Raft) sendHB() {
 				if ok && reply.Term > term {
 					Debug(dTerm, rf.me, "HB reply, newer term:%v", reply.Term)
 					go func() { rf.term <- reply.Term }()
-					go rf.becomeFollower(true)
+					rf.becomeFollower()
 					return
 				}
 				go func() { rf.term <- term }()
@@ -137,11 +146,27 @@ func (rf *Raft) sendHB() {
 }
 
 func (rf *Raft) becomeLeader() {
-	<-rf.phase.Candidate
-	// reopen
-	<-rf.leaderCtx
-	go func() { rf.leaderCtx <- make(chan void) }()
-	go func() { rf.phase.Leader <- void{} }()
+	followerCtx := <-rf.followerCtx
+	go func() {
+		ensureClosed(followerCtx)
+		rf.followerCtx <- followerCtx
+	}()
+	candidateCtx := <-rf.candidateCtx
+	go func() {
+		ensureClosed(candidateCtx)
+		rf.candidateCtx <- candidateCtx
+	}()
+
+	// reopen the leaderCtx
+	done := <-rf.leaderCtx
+	select {
+	case <-done:
+		go func() { rf.leaderCtx <- make(chan void) }()
+	default:
+		go func() { rf.leaderCtx <- done }()
+		Debug(dError, rf.me, "Already Leader!!!")
+		return
+	}
 
 	go rf.HB()
 	go rf.updateCommitIndex()
@@ -163,15 +188,7 @@ func (rf *Raft) HB() {
 		case <-done:
 			return
 		case <-timeout:
-			select {
-			// it's possible that both are ready
-			case <-done:
-				return
-			default:
-				<-rf.phase.Leader
-				go rf.sendHB()
-				go func() { rf.phase.Leader <- void{} }()
-			}
+			go rf.sendHB()
 		case <-rf.heartbeatTimer:
 		}
 	}
@@ -186,7 +203,6 @@ func (rf *Raft) updateCommitIndex() {
 		case <-done:
 			return
 		default:
-			<-rf.phase.Leader
 			commitIndex := <-rf.commitIndex
 			<-rf.logCh
 			<-rf.matchIndexCh
@@ -209,7 +225,6 @@ func (rf *Raft) updateCommitIndex() {
 			go func() { rf.matchIndexCh <- void{} }()
 			go func() { rf.logCh <- void{} }()
 			go func() { rf.commitIndex <- max }()
-			go func() { rf.phase.Leader <- void{} }()
 		}
 		time.Sleep(ApplierSleepTimeout)
 	}

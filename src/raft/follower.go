@@ -6,57 +6,44 @@ import (
 )
 
 // make ensure multiple call will create only one follower
-func (rf *Raft) becomeFollower(exitLeader bool) {
-	if exitLeader {
-		c := <-rf.leaderCtx
-		go func() {
-			ensureClosed(c)
-			rf.leaderCtx <- c
-		}()
+func (rf *Raft) becomeFollower() {
+	leaderCtx := <-rf.leaderCtx
+	go func() {
+		ensureClosed(leaderCtx)
+		rf.leaderCtx <- leaderCtx
+	}()
+	candidateCtx := <-rf.candidateCtx
+	go func() {
+		ensureClosed(candidateCtx)
+		rf.candidateCtx <- candidateCtx
+	}()
+
+	// ensure the followerCtx is alive
+	done := <-rf.followerCtx
+	select {
+	case <-done:
+		go func() { rf.followerCtx <- make(chan void) }()
+		go rf.ticker()
+		term := <-rf.term
+		go func() { rf.term <- term }()
+		Debug(dPhase, rf.me, "become Follower %v", term)
+	default:
+		go func() { rf.followerCtx <- done }()
+		rf.electionTimer <- void{}
+		Debug(dDrop, rf.me, "Already Follower")
 	}
-
-	// ensure Leader and Candidate are stopped
-	timeout := timeoutCh(SelectTimeout)
-phase:
-	for {
-		select {
-		case <-rf.phase.Leader:
-			Debug(dDrop, rf.me, "Leader -> Follower")
-			break phase
-		case <-rf.phase.Candidate:
-			Debug(dDrop, rf.me, "Candidate -> Follower")
-			break phase
-		case <-rf.phase.Follower:
-			go func() { rf.electionTimer <- void{} }()
-			go func() { rf.phase.Follower <- void{} }()
-			Debug(dDrop, rf.me, "Already Follower")
-			return
-		case <-timeout:
-			Debug(dDrop, rf.me, "No Phase!!!")
-			break phase
-		}
-	}
-
-	go rf.ticker()
-	go func() { rf.phase.Follower <- void{} }()
-
-	term := <-rf.term
-	go func() { rf.term <- term }()
-	Debug(dPhase, rf.me, "become Follower %v", term)
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
 func (rf *Raft) ticker() {
 	for {
+		span := rand.Intn(ElectionTimeoutRandomRange)
+		timeout := timeoutCh(ElectionTimeoutStart + time.Duration(span)*time.Millisecond)
+
 		select {
 		case <-rf.dead:
 			return
-		default:
-		}
-		span := rand.Intn(ElectionTimeoutRandomRange)
-		timeout := timeoutCh(ElectionTimeoutStart + time.Duration(span)*time.Millisecond)
-		select {
 		case <-timeout:
 			rf.becomeCandidate()
 			return

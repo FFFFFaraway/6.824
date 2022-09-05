@@ -38,10 +38,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	term := <-rf.term
 	reply.Term = term
 	if args.Term > term {
-		go rf.becomeFollower(true)
-
 		Debug(dTerm, rf.me, "<- RV from S%v, newer term:%v", args.CandidateId, args.Term)
 		go func() { rf.term <- args.Term }()
+
+		rf.becomeFollower()
 
 		<-rf.logCh
 		log := rf.log
@@ -73,13 +73,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		return
 	}
 
-	select {
-	case <-rf.phase.Follower:
-		go func() { rf.phase.Follower <- void{} }()
-		// use electionTimer instead of Exit, because it won't wait follower cycle
-		go func() { rf.electionTimer <- void{} }()
-	default:
-	}
+	go func() { rf.electionTimer <- void{} }()
 
 	vf := <-rf.voteFor
 	// voted for someone else
@@ -113,10 +107,10 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	term := <-rf.term
 	reply.Term = term
 	if args.Term > term {
-		go rf.becomeFollower(true)
-
 		Debug(dTerm, rf.me, "<- AE, newer term:%v", args.Term)
 		go func() { rf.term <- args.Term }()
+
+		rf.becomeFollower()
 
 		<-rf.voteFor
 		go func() { rf.voteFor <- args.LeaderID }()
@@ -144,8 +138,8 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	}
 
 	Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
-	// this will not exit the leader phase
-	go rf.becomeFollower(false)
+
+	rf.becomeFollower()
 
 	<-rf.voteFor
 	go func() { rf.voteFor <- args.LeaderID }()
