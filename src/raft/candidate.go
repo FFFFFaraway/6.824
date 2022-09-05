@@ -112,18 +112,9 @@ func (rf *Raft) sendAllRV() {
 	go func() { rf.candidateCtx <- done }()
 	select {
 	case <-suc:
-		select {
-		case <-done:
-			Debug(dElection, rf.me, "election fail, canceled")
-			rf.becomeFollower()
-		case <-timeout:
-			Debug(dElection, rf.me, "election fail, timeout")
-			rf.becomeFollower()
-		default:
-			Debug(dElection, rf.me, "election success")
-			// must use add go to call the cancel func quickly
-			rf.becomeLeader()
-		}
+		Debug(dElection, rf.me, "election success")
+		// must use add go to call the cancel func quickly
+		rf.becomeLeader()
 	case <-done:
 		Debug(dElection, rf.me, "election fail, canceled")
 		rf.becomeFollower()

@@ -113,22 +113,3 @@ func (rf *Raft) sendAE(server int, args *AEArgs, reply *AEReply) bool {
 	ok := rf.peers[server].Call("Raft.AE", args, reply)
 	return ok
 }
-
-// Kill
-// the tester doesn't halt goroutines created by Raft after each test,
-// but it does call the Kill() method. your code can use killed() to
-// check whether Kill() has been called. the use of atomic avoids the
-// need for a lock.
-//
-// the issue is that long-running goroutines use memory and may chew
-// up CPU time, perhaps causing later tests to fail and generating
-// confusing debug output. any goroutine with a long-running loop
-// should call killed() to check whether it should stop.
-//
-func (rf *Raft) Kill() {
-	select {
-	case <-rf.dead:
-	default:
-		close(rf.dead)
-	}
-}
