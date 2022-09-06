@@ -47,9 +47,10 @@ type AEReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	term := <-rf.term
+	go func() { rf.term <- term }()
+
 	reply.Term = term
 	if args.Term < term {
-		go func() { rf.term <- term }()
 		return
 	}
 
@@ -66,10 +67,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	vf := <-rf.voteFor
 	if args.Term > term {
 		Debug(dTerm, rf.me, "<- RV from S%v, newer term:%v", args.CandidateId, args.Term)
-		go func() { rf.term <- args.Term }()
-		rf.becomeFollower()
+		// becomeFollower doesn't use voteFor, and it's not release
+		rf.becomeFollower(&args.Term)
 	} else {
-		go func() { rf.term <- args.Term }()
 		Debug(dTerm, rf.me, "<- RV from S%v, same term:%v", args.CandidateId, args.Term)
 		go func() { rf.electionTimer <- void{} }()
 		// voted for someone else
@@ -90,12 +90,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	term := <-rf.term
+	go func() { rf.term <- term }()
 	reply.Term = term
 	if args.Term < term {
-		go func() { rf.term <- term }()
 		return
 	}
-	go func() { rf.term <- args.Term }()
 
 	if args.Term > term {
 		Debug(dTerm, rf.me, "<- AE, newer term:%v", args.Term)
@@ -103,7 +102,7 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
 	}
 
-	rf.becomeFollower()
+	rf.becomeFollower(&args.Term)
 
 	<-rf.voteFor
 	go func() { rf.voteFor <- args.LeaderID }()

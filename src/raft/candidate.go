@@ -1,6 +1,9 @@
 package raft
 
 func (rf *Raft) becomeCandidate() {
+	term := <-rf.term
+	term += 1
+
 	leaderCtx := <-rf.leaderCtx
 	go func() {
 		ensureClosed(leaderCtx)
@@ -12,20 +15,18 @@ func (rf *Raft) becomeCandidate() {
 		rf.followerCtx <- followerCtx
 	}()
 
+	// must change the phase before release the term
+	go func() { rf.term <- term }()
+
 	// ensure the candidateCtx is alive
 	done := <-rf.candidateCtx
 	select {
 	case <-done:
 		go func() { rf.candidateCtx <- make(chan void) }()
-
 		// leader vote for self
 		<-rf.voteFor
 		go func() { rf.voteFor <- rf.me }()
-
-		term := <-rf.term
-		go func() { rf.term <- term + 1 }()
-		Debug(dPhase, rf.me, "become Candidate %v", term+1)
-
+		Debug(dPhase, rf.me, "become Candidate %v", term)
 		rf.sendAllRV()
 	default:
 		go func() { rf.candidateCtx <- done }()
@@ -59,6 +60,14 @@ func (rf *Raft) sendAllRV() {
 	for i := range rf.peers {
 		if i != rf.me {
 			go func(i int) {
+				before := <-rf.candidateCtx
+				go func() { rf.candidateCtx <- before }()
+				select {
+				case <-before:
+					return
+				default:
+				}
+
 				reply := &RequestVoteReply{}
 				ok := rf.sendRequestVote(i, &RequestVoteArgs{
 					Term:         term,
@@ -68,12 +77,12 @@ func (rf *Raft) sendAllRV() {
 				}, reply)
 
 				term := <-rf.term
+				go func() { rf.term <- term }()
 				if reply.Term > term {
-					go func() { rf.term <- reply.Term }()
-					rf.becomeFollower()
+					Debug(dVote, rf.me, "RV reply, newer term:%v", reply.Term)
+					rf.becomeFollower(&reply.Term)
 					return
 				}
-				go func() { rf.term <- term }()
 
 				done := <-rf.candidateCtx
 				go func() { rf.candidateCtx <- done }()
@@ -117,9 +126,9 @@ func (rf *Raft) sendAllRV() {
 		rf.becomeLeader()
 	case <-done:
 		Debug(dElection, rf.me, "election fail, canceled")
-		rf.becomeFollower()
+		rf.becomeFollower(nil)
 	case <-timeout:
 		Debug(dElection, rf.me, "election fail, timeout")
-		rf.becomeFollower()
+		rf.becomeFollower(nil)
 	}
 }

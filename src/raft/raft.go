@@ -103,7 +103,6 @@ func (rf *Raft) Kill() {
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
 	term := <-rf.term
-	go func() { rf.term <- term }()
 	isLeader := false
 
 	done := <-rf.leaderCtx
@@ -112,6 +111,8 @@ func (rf *Raft) GetState() (int, bool) {
 	default:
 		isLeader = true
 	}
+
+	go func() { rf.term <- term }()
 	go func() { rf.leaderCtx <- done }()
 
 	return term, isLeader
@@ -136,16 +137,15 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index := -1
 	isLeader := false
 
+	term := <-rf.term
 	done := <-rf.leaderCtx
 	select {
 	case <-done:
 	default:
 		isLeader = true
 	}
-	go func() { rf.leaderCtx <- done }()
-
-	term := <-rf.term
 	go func() { rf.term <- term }()
+	go func() { rf.leaderCtx <- done }()
 
 	if !isLeader {
 		return index, term, isLeader
@@ -226,7 +226,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		rf.followerCtx <- c
 	}()
 	go rf.applier()
-	rf.becomeFollower()
+	rf.becomeFollower(nil)
 	go rf.cleaner()
 
 	return rf

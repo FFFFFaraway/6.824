@@ -6,7 +6,12 @@ import (
 )
 
 // make ensure multiple call will create only one follower
-func (rf *Raft) becomeFollower() {
+func (rf *Raft) becomeFollower(newTerm *int) {
+	term := <-rf.term
+	if newTerm != nil && *newTerm > term {
+		term = *newTerm
+	}
+
 	leaderCtx := <-rf.leaderCtx
 	go func() {
 		ensureClosed(leaderCtx)
@@ -18,14 +23,15 @@ func (rf *Raft) becomeFollower() {
 		rf.candidateCtx <- candidateCtx
 	}()
 
+	// must change the phase before release the term
+	go func() { rf.term <- term }()
+
 	// ensure the followerCtx is alive
 	done := <-rf.followerCtx
 	select {
 	case <-done:
 		go func() { rf.followerCtx <- make(chan void) }()
 		go rf.ticker()
-		term := <-rf.term
-		go func() { rf.term <- term }()
 		Debug(dPhase, rf.me, "become Follower %v", term)
 	default:
 		go func() { rf.followerCtx <- done }()
