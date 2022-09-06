@@ -228,6 +228,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	return rf
 }
 
+type TermCnt struct {
+	Term int
+	Cnt  int
+}
+
 //
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
@@ -240,11 +245,23 @@ func (rf *Raft) persist(term, voteFor int) {
 	e := labgob.NewEncoder(w)
 
 	e.Encode(rf.log)
+	compactLogTerm := make([]TermCnt, 1)
+	if len(rf.log) > 0 {
+		compactLogTerm[0] = TermCnt{Term: rf.log[0].Term, Cnt: 1}
+	}
+	for i := 1; i < len(rf.log); i++ {
+		if rf.log[i].Term == rf.log[i-1].Term {
+			compactLogTerm[len(compactLogTerm)-1].Cnt += 1
+		} else {
+			compactLogTerm = append(compactLogTerm, TermCnt{Term: rf.log[i].Term, Cnt: 1})
+		}
+	}
 	go func() { rf.logCh <- void{} }()
 	e.Encode(term)
 	e.Encode(voteFor)
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
+	Debug(dPersist, rf.me, "logTerm: %v, term: %v", compactLogTerm, term)
 }
 
 //

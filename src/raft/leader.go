@@ -66,6 +66,7 @@ func (rf *Raft) sendOneHB(oldLog []*Entry, i, oldTerm, commitIndex int) {
 			rf.nextIndex[i] = len(log) + 1
 			go func() { rf.nextIndexCh <- void{} }()
 		} else {
+			Debug(dTerm, rf.me, "HB reply with fail, XTerm: %v, XIndex: %v, XLen: %v", reply.XTerm, reply.XIndex, reply.XLen)
 			<-rf.logCh
 			<-rf.nextIndexCh
 			if reply.XTerm == -1 {

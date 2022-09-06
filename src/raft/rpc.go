@@ -67,6 +67,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	vf := <-rf.voteFor
 	// if same term, check not voted for someone else before
 	if args.Term == term && vf != -1 && vf != args.CandidateId {
+		Debug(dVote, rf.me, "Refuse Vote -> S%v, votedFor: %v", args.CandidateId, vf)
 		vote = false
 	}
 
@@ -133,6 +134,12 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		reply.XLen = len(rf.log)
 	}
 	go func() { rf.logCh <- void{} }()
+
+	if reply.Success {
+		Debug(dApply, rf.me, "AE success, log should be the same")
+	} else {
+		Debug(dApply, rf.me, "AE fail, XTerm: %v, XIndex: %v, XLen: %v", reply.XTerm, reply.XIndex, reply.XLen)
+	}
 
 	// persist after log have been copied
 	rf.becomeFollower(&args.Term, true)

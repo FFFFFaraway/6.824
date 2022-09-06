@@ -96,6 +96,7 @@ func (rf *Raft) sendAllRV() {
 				}
 
 				if ok && reply.Vote {
+					Debug(dElection, rf.me, "RV reply from <- %v", i)
 					cnt <- <-cnt + 1
 				}
 			}(i)
@@ -108,7 +109,9 @@ func (rf *Raft) sendAllRV() {
 			go func() { rf.candidateCtx <- done }()
 			select {
 			case c := <-cnt:
+				Debug(dElection, rf.me, "put suc, c: %v", c)
 				if c >= need {
+					Debug(dElection, rf.me, "put suc")
 					suc <- void{}
 					return
 				}
