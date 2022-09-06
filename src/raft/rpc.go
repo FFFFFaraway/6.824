@@ -65,27 +65,31 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	vote = vote || (args.LastLogTerm == log[lastLogIndex-1].Term && args.LastLogIndex >= lastLogIndex)
 
 	vf := <-rf.voteFor
-	if args.Term > term {
-		Debug(dTerm, rf.me, "<- RV from S%v, newer term:%v", args.CandidateId, args.Term)
-		// becomeFollower doesn't use voteFor, and it's not release
-		rf.becomeFollower(&args.Term)
-	} else {
-		Debug(dTerm, rf.me, "<- RV from S%v, same term:%v", args.CandidateId, args.Term)
-		go func() { rf.electionTimer <- void{} }()
-		// voted for someone else
-		if vf != -1 && vf != args.CandidateId {
-			vote = false
-		}
+	// if same term, check not voted for someone else before
+	if args.Term == term && vf != -1 && vf != args.CandidateId {
+		vote = false
 	}
 
 	if !vote {
-		go func() { rf.voteFor <- vf }()
 		Debug(dVote, rf.me, "Refuse Vote -> S%v", args.CandidateId)
-		return
+		go func() { rf.voteFor <- vf }()
+	} else {
+		Debug(dVote, rf.me, "Grant Vote %v -> S%v", vf, args.CandidateId)
+		go func() { rf.voteFor <- args.CandidateId }()
+		reply.Vote = true
 	}
-	Debug(dVote, rf.me, "Grant Vote %v -> S%v", vf, args.CandidateId)
-	go func() { rf.voteFor <- args.CandidateId }()
-	reply.Vote = true
+
+	if args.Term > term {
+		Debug(dTerm, rf.me, "<- RV from S%v, newer term:%v", args.CandidateId, args.Term)
+		rf.becomeFollower(&args.Term, true)
+	} else {
+		Debug(dTerm, rf.me, "<- RV from S%v, same term:%v", args.CandidateId, args.Term)
+		go func() { rf.electionTimer <- void{} }()
+		// if voted, then need to persist
+		if vote {
+			rf.persist(term, args.CandidateId)
+		}
+	}
 }
 
 func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
@@ -101,8 +105,6 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	} else {
 		Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
 	}
-
-	rf.becomeFollower(&args.Term)
 
 	<-rf.voteFor
 	go func() { rf.voteFor <- args.LeaderID }()
@@ -131,6 +133,9 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		reply.XLen = len(rf.log)
 	}
 	go func() { rf.logCh <- void{} }()
+
+	// persist after log have been copied
+	rf.becomeFollower(&args.Term, true)
 
 	commitIndex := <-rf.commitIndex
 	if reply.Success && args.CommitIndex > commitIndex {

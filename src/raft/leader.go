@@ -40,7 +40,7 @@ func (rf *Raft) sendOneHB(oldLog []*Entry, i, oldTerm, commitIndex int) {
 	go func() { rf.term <- term }()
 	if ok && reply.Term > term {
 		Debug(dTerm, rf.me, "command reply, newer term:%v", reply.Term)
-		rf.becomeFollower(&reply.Term)
+		rf.becomeFollower(&reply.Term, true)
 		return
 	}
 

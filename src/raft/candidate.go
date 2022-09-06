@@ -2,7 +2,10 @@ package raft
 
 func (rf *Raft) becomeCandidate() {
 	term := <-rf.term
+	vf := <-rf.voteFor
+	go func() { rf.voteFor <- vf }()
 	term += 1
+	rf.persist(term, vf)
 
 	leaderCtx := <-rf.leaderCtx
 	go func() {
@@ -80,7 +83,7 @@ func (rf *Raft) sendAllRV() {
 				go func() { rf.term <- term }()
 				if reply.Term > term {
 					Debug(dVote, rf.me, "RV reply, newer term:%v", reply.Term)
-					rf.becomeFollower(&reply.Term)
+					rf.becomeFollower(&reply.Term, true)
 					return
 				}
 
@@ -126,9 +129,9 @@ func (rf *Raft) sendAllRV() {
 		rf.becomeLeader()
 	case <-done:
 		Debug(dElection, rf.me, "election fail, canceled")
-		rf.becomeFollower(nil)
+		rf.becomeFollower(nil, false)
 	case <-timeout:
 		Debug(dElection, rf.me, "election fail, timeout")
-		rf.becomeFollower(nil)
+		rf.becomeFollower(nil, false)
 	}
 }

@@ -6,10 +6,17 @@ import (
 )
 
 // make ensure multiple call will create only one follower
-func (rf *Raft) becomeFollower(newTerm *int) {
+func (rf *Raft) becomeFollower(newTerm *int, needPersist bool) {
 	term := <-rf.term
+	vf := <-rf.voteFor
+	go func() { rf.voteFor <- vf }()
+
 	if newTerm != nil && *newTerm > term {
 		term = *newTerm
+	}
+
+	if needPersist {
+		rf.persist(term, vf)
 	}
 
 	leaderCtx := <-rf.leaderCtx

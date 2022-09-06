@@ -1,6 +1,8 @@
 package raft
 
 import (
+	"6.824/labgob"
+	"bytes"
 	"time"
 
 	//	"6.824/labgob"
@@ -134,18 +136,8 @@ func (rf *Raft) GetState() (int, bool) {
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	Debug(dDrop, rf.me, "Start a command")
+	term, isLeader := rf.GetState()
 	index := -1
-	isLeader := false
-
-	term := <-rf.term
-	done := <-rf.leaderCtx
-	select {
-	case <-done:
-	default:
-		isLeader = true
-	}
-	go func() { rf.term <- term }()
-	go func() { rf.leaderCtx <- done }()
 
 	if !isLeader {
 		return index, term, isLeader
@@ -160,6 +152,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	})
 	index = len(rf.log)
 	go func() { rf.logCh <- void{} }()
+
+	vf := <-rf.voteFor
+	go func() { rf.voteFor <- vf }()
+	rf.persist(term, vf)
 
 	return index, term, isLeader
 }
@@ -199,10 +195,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		nextIndexCh:   make(chan void),
 	}
 
-	// initialize from state persisted before a crash
-	rf.readPersist(persister.ReadRaftState())
-
-	// start ticker goroutine to start elections
 	go func() { rf.term <- 0 }()
 	go func() { rf.logCh <- void{} }()
 	go func() { rf.commitIndex <- 0 }()
@@ -225,9 +217,57 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		ensureClosed(c)
 		rf.followerCtx <- c
 	}()
+
+	// initialize from state persisted before a crash
+	rf.readPersist(persister.ReadRaftState())
+
 	go rf.applier()
-	rf.becomeFollower(nil)
+	rf.becomeFollower(nil, false)
 	go rf.cleaner()
 
 	return rf
+}
+
+//
+// save Raft's persistent state to stable storage,
+// where it can later be retrieved after a crash and restart.
+// see paper's Figure 2 for a description of what should be persistent.
+//
+func (rf *Raft) persist(term, voteFor int) {
+	<-rf.logCh
+
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+	e.Encode(rf.log)
+	go func() { rf.logCh <- void{} }()
+	e.Encode(term)
+	e.Encode(voteFor)
+	data := w.Bytes()
+	rf.persister.SaveRaftState(data)
+}
+
+//
+// restore previously persisted state.
+//
+func (rf *Raft) readPersist(data []byte) {
+	if data == nil || len(data) < 1 { // bootstrap without any state?
+		return
+	}
+	<-rf.term
+	<-rf.voteFor
+	<-rf.logCh
+
+	r := bytes.NewBuffer(data)
+	d := labgob.NewDecoder(r)
+	var term int
+	var voteFor int
+	if d.Decode(&rf.log) != nil || d.Decode(&term) != nil || d.Decode(&voteFor) != nil {
+		panic("readPersist error")
+	}
+	Debug(dPersist, rf.me, "len(log): %v, term: %v, voteFor: %v", len(rf.log), term, voteFor)
+
+	go func() { rf.term <- term }()
+	go func() { rf.voteFor <- voteFor }()
+	go func() { rf.logCh <- void{} }()
 }
