@@ -13,12 +13,9 @@ func (rf *Raft) sendOneHB(i, oldTerm int) {
 	go func() { rf.nextIndexCh <- void{} }()
 
 	<-rf.logCh
-	oldStart := <-rf.snapshotLastIndex
-	go func() { rf.snapshotLastIndex <- oldStart }()
-	lastTerm := <-rf.snapshotLastTerm
-	go func() { rf.snapshotLastTerm <- lastTerm }()
+	oldStart := rf.snapshotLastIndex
 	oldLog := rf.log
-	prevLogTerm := lastTerm
+	prevLogTerm := rf.snapshotLastTerm
 	// if startIndex == start + 1, then preTerm == snapshotLastIndex
 	if startIndex != oldStart+1 {
 		// prev: -1, index to log index: -1 again, exclude snapshot: -start
@@ -66,8 +63,6 @@ func (rf *Raft) sendOneHB(i, oldTerm int) {
 	}
 
 	<-rf.logCh
-	start := <-rf.snapshotLastIndex
-	go func() { rf.snapshotLastIndex <- start }()
 	log := rf.log
 	go func() { rf.logCh <- void{} }()
 
@@ -77,7 +72,7 @@ func (rf *Raft) sendOneHB(i, oldTerm int) {
 			rf.matchIndex[i] = len(oldLog) + oldStart
 			go func() { rf.matchIndexCh <- void{} }()
 			<-rf.nextIndexCh
-			rf.nextIndex[i] = len(log) + 1 + start
+			rf.nextIndex[i] = len(log) + 1 + rf.snapshotLastIndex
 			go func() { rf.nextIndexCh <- void{} }()
 		} else {
 			Debug(dTerm, rf.me, "HB reply with fail, XTerm: %v, XIndex: %v, XLen: %v", reply.XTerm, reply.XIndex, reply.XLen)
@@ -87,8 +82,8 @@ func (rf *Raft) sendOneHB(i, oldTerm int) {
 				rf.nextIndex[i] = reply.XLen + 1
 			} else {
 				tailIndex := -1
-				for index := rf.nextIndex[i] - 1; index >= 1 && rf.log[index-1-start].Term > reply.XTerm; index-- {
-					if rf.log[index-1-start].Term == reply.XTerm {
+				for index := rf.nextIndex[i] - 1; index >= 1 && rf.log[index-1-rf.snapshotLastIndex].Term > reply.XTerm; index-- {
+					if rf.log[index-1-rf.snapshotLastIndex].Term == reply.XTerm {
 						tailIndex = index
 						break
 					}
@@ -153,9 +148,7 @@ func (rf *Raft) becomeLeader() {
 	go func() { rf.matchIndexCh <- void{} }()
 
 	<-rf.logCh
-	start := <-rf.snapshotLastIndex
-	go func() { rf.snapshotLastIndex <- start }()
-	lastLogIndex := len(rf.log) + start
+	lastLogIndex := len(rf.log) + rf.snapshotLastIndex
 	go func() { rf.logCh <- void{} }()
 
 	<-rf.nextIndexCh
@@ -201,18 +194,16 @@ func (rf *Raft) updateCommitIndex() {
 			<-rf.logCh
 			commitIndex := <-rf.commitIndex
 			<-rf.matchIndexCh
-			start := <-rf.snapshotLastIndex
-			go func() { rf.snapshotLastIndex <- start }()
 
 			var max int
-			for max = len(rf.log) + start; max >= commitIndex+1; max-- {
+			for max = len(rf.log) + rf.snapshotLastIndex; max >= commitIndex+1; max-- {
 				cnt := 0
 				for _, c := range rf.matchIndex {
 					if c >= max {
 						cnt++
 					}
 				}
-				if cnt >= len(rf.peers)/2 && rf.log[max-1-start].Term == term {
+				if cnt >= len(rf.peers)/2 && rf.log[max-1-rf.snapshotLastIndex].Term == term {
 					break
 				}
 			}

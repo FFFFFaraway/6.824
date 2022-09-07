@@ -71,8 +71,8 @@ type Raft struct {
 	nextIndex     []int
 	nextIndexCh   chan void
 	// 2D
-	snapshotLastIndex chan int
-	snapshotLastTerm  chan int
+	snapshotLastIndex int
+	snapshotLastTerm  int
 }
 
 // Kill
@@ -139,8 +139,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	Debug(dLog, rf.me, "Append Log with Term %v", term)
 	// append entry to log
 	<-rf.logCh
-	start := <-rf.snapshotLastIndex
-	go func() { rf.snapshotLastIndex <- start }()
+	start := rf.snapshotLastIndex
 	rf.log = append(rf.log, &Entry{
 		Term:    term,
 		Command: command,
@@ -188,8 +187,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		matchIndexCh:      make(chan void),
 		nextIndex:         make([]int, len(peers)),
 		nextIndexCh:       make(chan void),
-		snapshotLastIndex: make(chan int),
-		snapshotLastTerm:  make(chan int),
+		snapshotLastIndex: 0,
+		snapshotLastTerm:  0,
 	}
 
 	go func() { rf.term <- 0 }()
@@ -214,8 +213,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		ensureClosed(c)
 		rf.followerCtx <- c
 	}()
-	go func() { rf.snapshotLastIndex <- 0 }()
-	go func() { rf.snapshotLastTerm <- 0 }()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -295,13 +292,12 @@ func (rf *Raft) readPersist(data []byte) {
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	Debug(dSnap, rf.me, "Snapshot before index: %v", index)
 	<-rf.logCh
-	oldStart := <-rf.snapshotLastIndex
-	<-rf.snapshotLastTerm
+	oldStart := rf.snapshotLastIndex
 	lastEntry := rf.log[index-1-oldStart]
 	lastTerm := lastEntry.Term
 	// start at index + 1 position
 	rf.log = rf.log[index+1-1-oldStart:]
+	rf.snapshotLastIndex = index
+	rf.snapshotLastTerm = lastTerm
 	go func() { rf.logCh <- void{} }()
-	go func() { rf.snapshotLastIndex <- index }()
-	go func() { rf.snapshotLastTerm <- lastTerm }()
 }
