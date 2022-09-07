@@ -40,7 +40,6 @@ type Entry struct {
 }
 
 const (
-	RequestVoteTotalTimeout    = 100 * time.Millisecond
 	HeartBeatTimeout           = 100 * time.Millisecond
 	ElectionTimeoutStart       = 300 * time.Millisecond
 	ElectionTimeoutRandomRange = 300 // time.Millisecond

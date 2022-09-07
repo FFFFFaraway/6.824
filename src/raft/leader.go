@@ -4,7 +4,12 @@ import (
 	"time"
 )
 
-func (rf *Raft) sendOneHB(oldLog []*Entry, i, oldTerm, commitIndex int) {
+func (rf *Raft) sendOneHB(i, oldTerm int) {
+	<-rf.logCh
+	oldLog := rf.log
+	go func() { rf.logCh <- void{} }()
+	commitIndex := <-rf.commitIndex
+	go func() { rf.commitIndex <- commitIndex }()
 
 	<-rf.nextIndexCh
 	startIndex := rf.nextIndex[i]
@@ -87,7 +92,7 @@ func (rf *Raft) sendOneHB(oldLog []*Entry, i, oldTerm, commitIndex int) {
 			}
 			go func() { rf.nextIndexCh <- void{} }()
 			go func() { rf.logCh <- void{} }()
-			rf.sendOneHB(oldLog, i, oldTerm, commitIndex)
+			rf.sendOneHB(i, oldTerm)
 		}
 	}
 }
@@ -97,15 +102,9 @@ func (rf *Raft) sendAllHB() {
 	go func() { rf.term <- term }()
 	Debug(dLeader, rf.me, "send out HB, term %v", term)
 
-	<-rf.logCh
-	log := rf.log
-	go func() { rf.logCh <- void{} }()
-	commitIndex := <-rf.commitIndex
-	go func() { rf.commitIndex <- commitIndex }()
-
 	for i := range rf.peers {
 		if i != rf.me {
-			go rf.sendOneHB(log, i, term, commitIndex)
+			go rf.sendOneHB(i, term)
 		}
 	}
 }
