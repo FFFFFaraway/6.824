@@ -42,7 +42,6 @@ func (rf *Raft) becomeFollower(newTerm *int, needPersist bool) {
 		Debug(dPhase, rf.me, "become Follower %v", term)
 	default:
 		go func() { rf.followerCtx <- done }()
-		rf.electionTimer <- void{}
 		Debug(dDrop, rf.me, "Already Follower")
 	}
 }
