@@ -1,5 +1,10 @@
 package raft
 
+import (
+	"math/rand"
+	"time"
+)
+
 func (rf *Raft) becomeCandidate() {
 	term := <-rf.term
 	vf := <-rf.voteFor
@@ -25,16 +30,15 @@ func (rf *Raft) becomeCandidate() {
 	done := <-rf.candidateCtx
 	select {
 	case <-done:
-		go func() { rf.candidateCtx <- make(chan void) }()
 		// leader vote for self
 		<-rf.voteFor
 		go func() { rf.voteFor <- rf.me }()
 		Debug(dPhase, rf.me, "become Candidate %v", term)
-		rf.sendAllRV()
 	default:
-		go func() { rf.candidateCtx <- done }()
-		Debug(dError, rf.me, "Already Candidate!!!")
+		Debug(dPhase, rf.me, "Already Candidate, start newer term election")
 	}
+	go func() { rf.candidateCtx <- make(chan void) }()
+	rf.sendAllRV()
 }
 
 func (rf *Raft) sendAllRV() {
@@ -45,7 +49,8 @@ func (rf *Raft) sendAllRV() {
 	// whether the received vote satisfy need
 	suc := make(chan void)
 
-	timeout := timeoutCh(RequestVoteTotalTimeout)
+	span := rand.Intn(ElectionTimeoutRandomRange)
+	timeout := timeoutCh(ElectionTimeoutStart + time.Duration(span)*time.Millisecond)
 
 	term := <-rf.term
 	go func() { rf.term <- term }()
@@ -96,7 +101,7 @@ func (rf *Raft) sendAllRV() {
 				}
 
 				if ok && reply.Vote {
-					Debug(dElection, rf.me, "RV reply from <- %v", i)
+					Debug(dElection, rf.me, "RV reply Vote from <- %v", i)
 					cnt <- <-cnt + 1
 				}
 			}(i)
@@ -109,9 +114,7 @@ func (rf *Raft) sendAllRV() {
 			go func() { rf.candidateCtx <- done }()
 			select {
 			case c := <-cnt:
-				Debug(dElection, rf.me, "put suc, c: %v", c)
 				if c >= need {
-					Debug(dElection, rf.me, "put suc")
 					suc <- void{}
 					return
 				}
@@ -135,6 +138,6 @@ func (rf *Raft) sendAllRV() {
 		rf.becomeFollower(nil, false)
 	case <-timeout:
 		Debug(dElection, rf.me, "election fail, timeout")
-		rf.becomeFollower(nil, false)
+		rf.becomeCandidate()
 	}
 }
