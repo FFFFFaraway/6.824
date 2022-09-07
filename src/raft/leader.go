@@ -5,15 +5,27 @@ import (
 )
 
 func (rf *Raft) sendOneHB(i, oldTerm int) {
-	<-rf.logCh
-	oldLog := rf.log
-	go func() { rf.logCh <- void{} }()
 	commitIndex := <-rf.commitIndex
 	go func() { rf.commitIndex <- commitIndex }()
 
 	<-rf.nextIndexCh
 	startIndex := rf.nextIndex[i]
 	go func() { rf.nextIndexCh <- void{} }()
+
+	<-rf.logCh
+	oldStart := <-rf.snapshotLastIndex
+	go func() { rf.snapshotLastIndex <- oldStart }()
+	lastTerm := <-rf.snapshotLastTerm
+	go func() { rf.snapshotLastTerm <- lastTerm }()
+	oldLog := rf.log
+	prevLogTerm := lastTerm
+	// if startIndex == start + 1, then preTerm == snapshotLastIndex
+	if startIndex != oldStart+1 {
+		// prev: -1, index to log index: -1 again, exclude snapshot: -start
+		prevLogTerm = oldLog[startIndex-1-1-oldStart].Term
+	}
+	sendLogs := oldLog[startIndex-1-oldStart:]
+	go func() { rf.logCh <- void{} }()
 
 	// before send check once more
 	leaderDone := <-rf.leaderCtx
@@ -25,15 +37,10 @@ func (rf *Raft) sendOneHB(i, oldTerm int) {
 	default:
 	}
 
-	prevLogTerm := 0
-	if startIndex != 1 {
-		// prev: -1, index to log index: -1 again
-		prevLogTerm = oldLog[startIndex-2].Term
-	}
 	reply := &AEReply{}
 	ok := rf.sendAE(i, &AEArgs{
 		Term:         oldTerm,
-		Logs:         oldLog[startIndex-1:],
+		Logs:         sendLogs,
 		CommitIndex:  commitIndex,
 		LeaderID:     rf.me,
 		PrevLogIndex: startIndex - 1,
@@ -59,16 +66,18 @@ func (rf *Raft) sendOneHB(i, oldTerm int) {
 	}
 
 	<-rf.logCh
+	start := <-rf.snapshotLastIndex
+	go func() { rf.snapshotLastIndex <- start }()
 	log := rf.log
 	go func() { rf.logCh <- void{} }()
 
 	if ok {
 		if reply.Success {
 			<-rf.matchIndexCh
-			rf.matchIndex[i] = len(oldLog)
+			rf.matchIndex[i] = len(oldLog) + oldStart
 			go func() { rf.matchIndexCh <- void{} }()
 			<-rf.nextIndexCh
-			rf.nextIndex[i] = len(log) + 1
+			rf.nextIndex[i] = len(log) + 1 + start
 			go func() { rf.nextIndexCh <- void{} }()
 		} else {
 			Debug(dTerm, rf.me, "HB reply with fail, XTerm: %v, XIndex: %v, XLen: %v", reply.XTerm, reply.XIndex, reply.XLen)
@@ -78,8 +87,8 @@ func (rf *Raft) sendOneHB(i, oldTerm int) {
 				rf.nextIndex[i] = reply.XLen + 1
 			} else {
 				tailIndex := -1
-				for index := rf.nextIndex[i] - 1; index >= 1 && rf.log[index-1].Term > reply.XTerm; index-- {
-					if rf.log[index-1].Term == reply.XTerm {
+				for index := rf.nextIndex[i] - 1; index >= 1 && rf.log[index-1-start].Term > reply.XTerm; index-- {
+					if rf.log[index-1-start].Term == reply.XTerm {
 						tailIndex = index
 						break
 					}
@@ -144,7 +153,9 @@ func (rf *Raft) becomeLeader() {
 	go func() { rf.matchIndexCh <- void{} }()
 
 	<-rf.logCh
-	lastLogIndex := len(rf.log)
+	start := <-rf.snapshotLastIndex
+	go func() { rf.snapshotLastIndex <- start }()
+	lastLogIndex := len(rf.log) + start
 	go func() { rf.logCh <- void{} }()
 
 	<-rf.nextIndexCh
@@ -190,16 +201,18 @@ func (rf *Raft) updateCommitIndex() {
 			<-rf.logCh
 			commitIndex := <-rf.commitIndex
 			<-rf.matchIndexCh
+			start := <-rf.snapshotLastIndex
+			go func() { rf.snapshotLastIndex <- start }()
 
 			var max int
-			for max = len(rf.log); max >= commitIndex+1; max-- {
+			for max = len(rf.log) + start; max >= commitIndex+1; max-- {
 				cnt := 0
 				for _, c := range rf.matchIndex {
 					if c >= max {
 						cnt++
 					}
 				}
-				if cnt >= len(rf.peers)/2 && rf.log[max-1].Term == term {
+				if cnt >= len(rf.peers)/2 && rf.log[max-1-start].Term == term {
 					break
 				}
 			}

@@ -56,11 +56,15 @@ func (rf *Raft) sendAllRV() {
 	go func() { rf.term <- term }()
 
 	<-rf.logCh
-	log := rf.log
-	lastLogIndex := len(log)
-	lastLogTerm := 0
-	if lastLogIndex != 0 {
-		lastLogTerm = log[lastLogIndex-1].Term
+	start := <-rf.snapshotLastIndex
+	go func() { rf.snapshotLastIndex <- start }()
+	lastTerm := <-rf.snapshotLastTerm
+	go func() { rf.snapshotLastTerm <- lastTerm }()
+
+	lastLogIndex := len(rf.log) + start
+	lastLogTerm := lastTerm
+	if len(rf.log) != 0 {
+		lastLogTerm = rf.log[len(rf.log)-1].Term
 	}
 	go func() { rf.logCh <- void{} }()
 

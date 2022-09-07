@@ -50,35 +50,29 @@ const (
 // A Go object implementing a single Raft peer.
 //
 type Raft struct {
-	//mu        sync.Mutex          // Lock to protect shared access to this peer's state
-
-	// peers read only, no mutex need
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
-	// me read only, no mutex need
-	me   int       // this peer's index into peers[]
-	dead chan void // set by Kill()
+	me        int                 // this peer's index into peers[]
+	dead      chan void           // set by Kill()
 
-	// Your data here (2A, 2B, 2C).
-	// Look at the paper's Figure 2 for a description of what
-	// state a Raft server must maintain.
 	electionTimer chan void
 	term          chan int
 	voteFor       chan int
-
-	// don't know whether there is a better way to operate logs
-	logCh        chan void
-	log          []*Entry
-	applyCh      chan ApplyMsg
-	leaderCtx    chan chan void
-	candidateCtx chan chan void
-	followerCtx  chan chan void
-	commitIndex  chan int
-	lastApplied  chan int
-	matchIndex   []int
-	matchIndexCh chan void
-	nextIndex    []int
-	nextIndexCh  chan void
+	logCh         chan void
+	log           []*Entry
+	applyCh       chan ApplyMsg
+	leaderCtx     chan chan void
+	candidateCtx  chan chan void
+	followerCtx   chan chan void
+	commitIndex   chan int
+	lastApplied   chan int
+	matchIndex    []int
+	matchIndexCh  chan void
+	nextIndex     []int
+	nextIndexCh   chan void
+	// 2D
+	snapshotLastIndex chan int
+	snapshotLastTerm  chan int
 }
 
 // Kill
@@ -145,11 +139,13 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	Debug(dLog, rf.me, "Append Log with Term %v", term)
 	// append entry to log
 	<-rf.logCh
+	start := <-rf.snapshotLastIndex
+	go func() { rf.snapshotLastIndex <- start }()
 	rf.log = append(rf.log, &Entry{
 		Term:    term,
 		Command: command,
 	})
-	index = len(rf.log)
+	index = len(rf.log) + start
 	go func() { rf.logCh <- void{} }()
 
 	vf := <-rf.voteFor
@@ -173,25 +169,27 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{
-		peers:         peers,
-		persister:     persister,
-		me:            me,
-		dead:          make(chan void),
-		electionTimer: make(chan void),
-		term:          make(chan int),
-		voteFor:       make(chan int),
-		log:           make([]*Entry, 0),
-		logCh:         make(chan void),
-		applyCh:       applyCh,
-		leaderCtx:     make(chan chan void),
-		candidateCtx:  make(chan chan void),
-		followerCtx:   make(chan chan void),
-		commitIndex:   make(chan int),
-		lastApplied:   make(chan int),
-		matchIndex:    make([]int, len(peers)),
-		matchIndexCh:  make(chan void),
-		nextIndex:     make([]int, len(peers)),
-		nextIndexCh:   make(chan void),
+		peers:             peers,
+		persister:         persister,
+		me:                me,
+		dead:              make(chan void),
+		electionTimer:     make(chan void),
+		term:              make(chan int),
+		voteFor:           make(chan int),
+		log:               make([]*Entry, 0),
+		logCh:             make(chan void),
+		applyCh:           applyCh,
+		leaderCtx:         make(chan chan void),
+		candidateCtx:      make(chan chan void),
+		followerCtx:       make(chan chan void),
+		commitIndex:       make(chan int),
+		lastApplied:       make(chan int),
+		matchIndex:        make([]int, len(peers)),
+		matchIndexCh:      make(chan void),
+		nextIndex:         make([]int, len(peers)),
+		nextIndexCh:       make(chan void),
+		snapshotLastIndex: make(chan int),
+		snapshotLastTerm:  make(chan int),
 	}
 
 	go func() { rf.term <- 0 }()
@@ -216,6 +214,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		ensureClosed(c)
 		rf.followerCtx <- c
 	}()
+	go func() { rf.snapshotLastIndex <- 0 }()
+	go func() { rf.snapshotLastTerm <- 0 }()
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
@@ -286,4 +286,22 @@ func (rf *Raft) readPersist(data []byte) {
 	go func() { rf.term <- term }()
 	go func() { rf.voteFor <- voteFor }()
 	go func() { rf.logCh <- void{} }()
+}
+
+// Snapshot the service says it has created a snapshot that has
+// all info up to and including index. this means the
+// service no longer needs the log through (and including)
+// that index. Raft should now trim its log as much as possible.
+func (rf *Raft) Snapshot(index int, snapshot []byte) {
+	Debug(dSnap, rf.me, "Snapshot before index: %v", index)
+	<-rf.logCh
+	oldStart := <-rf.snapshotLastIndex
+	<-rf.snapshotLastTerm
+	lastEntry := rf.log[index-1-oldStart]
+	lastTerm := lastEntry.Term
+	// start at index + 1 position
+	rf.log = rf.log[index+1-1-oldStart:]
+	go func() { rf.logCh <- void{} }()
+	go func() { rf.snapshotLastIndex <- index }()
+	go func() { rf.snapshotLastTerm <- lastTerm }()
 }

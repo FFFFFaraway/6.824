@@ -56,13 +56,13 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// grant vote restriction
 	<-rf.logCh
-	log := rf.log
-	lastLogIndex := len(log)
-	go func() { rf.logCh <- void{} }()
-
+	start := <-rf.snapshotLastIndex
+	go func() { rf.snapshotLastIndex <- start }()
+	lastLogIndex := len(rf.log) + start
 	vote := lastLogIndex == 0
-	vote = vote || args.LastLogTerm > log[lastLogIndex-1].Term
-	vote = vote || (args.LastLogTerm == log[lastLogIndex-1].Term && args.LastLogIndex >= lastLogIndex)
+	vote = vote || args.LastLogTerm > rf.log[lastLogIndex-1-start].Term
+	vote = vote || (args.LastLogTerm == rf.log[lastLogIndex-1-start].Term && args.LastLogIndex >= lastLogIndex)
+	go func() { rf.logCh <- void{} }()
 
 	vf := <-rf.voteFor
 	// if same term, check not voted for someone else before
@@ -113,19 +113,23 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 
 	// Logs
 	<-rf.logCh
-	reply.XLen = len(rf.log)
-	if len(rf.log) >= args.PrevLogIndex {
-		if args.PrevLogIndex == 0 {
+	start := <-rf.snapshotLastIndex
+	go func() { rf.snapshotLastIndex <- start }()
+	lastTerm := <-rf.snapshotLastTerm
+	go func() { rf.snapshotLastTerm <- lastTerm }()
+	reply.XLen = len(rf.log) + start
+	if reply.XLen >= args.PrevLogIndex {
+		if args.PrevLogIndex-start == 0 {
 			rf.log = args.Logs
 			reply.Success = true
-		} else if rf.log[args.PrevLogIndex-1].Term == args.PrevLogTerm {
-			rf.log = append(rf.log[:args.PrevLogIndex], args.Logs...)
+		} else if rf.log[args.PrevLogIndex-1-start].Term == args.PrevLogTerm {
+			rf.log = append(rf.log[:args.PrevLogIndex-start], args.Logs...)
 			reply.Success = true
 		} else {
-			reply.XTerm = rf.log[args.PrevLogIndex-1].Term
+			reply.XTerm = rf.log[args.PrevLogIndex-1-start].Term
 			reply.XIndex = 0
 			for i := args.PrevLogIndex; i >= 1; i-- {
-				if rf.log[i-1].Term != reply.XTerm {
+				if rf.log[i-1-start].Term != reply.XTerm {
 					reply.XIndex = i
 					break
 				}
