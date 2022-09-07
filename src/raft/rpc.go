@@ -85,9 +85,10 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		rf.becomeFollower(&args.Term, true)
 	} else {
 		Debug(dTerm, rf.me, "<- RV from S%v, same term:%v", args.CandidateId, args.Term)
-		go func() { rf.electionTimer <- void{} }()
 		// if voted, then need to persist
 		if vote {
+			// must reset electionTimer under vote condition
+			go func() { rf.electionTimer <- void{} }()
 			rf.persist(term, args.CandidateId)
 		}
 	}
@@ -112,6 +113,7 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 
 	// Logs
 	<-rf.logCh
+	reply.XLen = len(rf.log)
 	if len(rf.log) >= args.PrevLogIndex {
 		if args.PrevLogIndex == 0 {
 			rf.log = args.Logs
@@ -131,23 +133,26 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		}
 	} else {
 		reply.XTerm = -1
-		reply.XLen = len(rf.log)
 	}
 	go func() { rf.logCh <- void{} }()
 
-	if reply.Success {
-		Debug(dApply, rf.me, "AE success, log should be the same")
-	} else {
+	if !reply.Success {
 		Debug(dApply, rf.me, "AE fail, XTerm: %v, XIndex: %v, XLen: %v", reply.XTerm, reply.XIndex, reply.XLen)
 	}
 
 	// persist after log have been copied
 	rf.becomeFollower(&args.Term, true)
+	rf.electionTimer <- void{}
 
 	commitIndex := <-rf.commitIndex
 	if reply.Success && args.CommitIndex > commitIndex {
 		Debug(dApply, rf.me, "<- AE, update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
-		go func() { rf.commitIndex <- args.CommitIndex }()
+		// must use the minimum
+		if reply.XLen < args.CommitIndex {
+			go func() { rf.commitIndex <- reply.XLen }()
+		} else {
+			go func() { rf.commitIndex <- args.CommitIndex }()
+		}
 	} else {
 		Debug(dDrop, rf.me, "<- AE, refuse update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 		go func() { rf.commitIndex <- commitIndex }()
