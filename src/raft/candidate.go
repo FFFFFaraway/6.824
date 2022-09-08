@@ -13,15 +13,11 @@ func (rf *Raft) becomeCandidate() {
 	rf.persist(term, vf)
 
 	leaderCtx := <-rf.leaderCtx
-	go func() {
-		ensureClosed(leaderCtx)
-		rf.leaderCtx <- leaderCtx
-	}()
+	ensureClosed(leaderCtx)
+	go func() { rf.leaderCtx <- leaderCtx }()
 	followerCtx := <-rf.followerCtx
-	go func() {
-		ensureClosed(followerCtx)
-		rf.followerCtx <- followerCtx
-	}()
+	ensureClosed(followerCtx)
+	go func() { rf.followerCtx <- followerCtx }()
 
 	// must change the phase before release the term
 	go func() { rf.term <- term }()
@@ -36,6 +32,7 @@ func (rf *Raft) becomeCandidate() {
 		Debug(dPhase, rf.me, "become Candidate %v", term)
 	default:
 		Debug(dPhase, rf.me, "Already Candidate, start newer term election")
+		// exit all goroutine in last term
 		ensureClosed(done)
 	}
 	go func() { rf.candidateCtx <- make(chan void) }()

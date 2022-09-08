@@ -5,15 +5,44 @@ import (
 )
 
 // must acquire logCh and nextIndexCh before call it
-func (rf *Raft) prepare(i, term, commitIndex int) *AEArgs {
+func (rf *Raft) prepare(done chan void, i, term, commitIndex int) *AEArgs {
 	// recompute the AEArgs
 	start := rf.snapshotLastIndex
 	startIndex := rf.nextIndex[i]
-	prevLogTerm := rf.snapshotLastTerm
+
+	sendOneSnapshot := func() {
+		select {
+		case <-done:
+			return
+		default:
+		}
+
+		reply := &SnapshotReply{}
+		ok := rf.sendSnapshot(i, &SnapshotArgs{
+			Term:          term,
+			LeaderID:      rf.me,
+			Snapshot:      rf.snapshot,
+			SnapshotTerm:  rf.snapshotLastTerm,
+			SnapshotIndex: rf.snapshotLastIndex,
+		}, reply)
+
+		if ok {
+			Debug(dSnap, rf.me, "Snapshot reply from <- %v", i)
+		}
+	}
+
+	var prevLogTerm int
 	// if startIndex == start + 1, then preTerm == snapshotLastIndex
-	if startIndex != start+1 {
+	if startIndex == start+1 {
+		prevLogTerm = rf.snapshotLastTerm
+	} else if startIndex > start+1 {
 		// prev: -1, index to log index: -1 again, exclude snapshot: -start
 		prevLogTerm = rf.log[startIndex-1-1-start].Term
+	} else {
+		// need to installSnapshot
+		go sendOneSnapshot()
+		startIndex = start + 1
+		prevLogTerm = rf.snapshotLastTerm
 	}
 	sendLogs := rf.log[startIndex-1-start:]
 	return &AEArgs{
@@ -43,7 +72,7 @@ func (rf *Raft) sendAllHB(done chan void) {
 	oldLog := rf.log
 	for i := range rf.peers {
 		if i != rf.me {
-			preparation[i] = rf.prepare(i, oldTerm, oldCommitIndex)
+			preparation[i] = rf.prepare(done, i, oldTerm, oldCommitIndex)
 		}
 	}
 
@@ -102,7 +131,7 @@ func (rf *Raft) sendAllHB(done chan void) {
 					rf.nextIndex[i] = reply.XLen + 1
 				} else {
 					tailIndex := -1
-					for index := rf.nextIndex[i] - 1; index >= 1 && rf.log[index-1-rf.snapshotLastIndex].Term > reply.XTerm; index-- {
+					for index := rf.nextIndex[i] - 1; index-rf.snapshotLastIndex >= 1 && rf.log[index-1-rf.snapshotLastIndex].Term > reply.XTerm; index-- {
 						if rf.log[index-1-rf.snapshotLastIndex].Term == reply.XTerm {
 							tailIndex = index
 							break
@@ -116,7 +145,7 @@ func (rf *Raft) sendAllHB(done chan void) {
 				}
 
 				// use the rf.nextIndex to recompute the AEArgs
-				preparation[i] = rf.prepare(i, term, commitIndex)
+				preparation[i] = rf.prepare(done, i, term, commitIndex)
 
 				go func() { rf.nextIndexCh <- void{} }()
 				go func() { rf.logCh <- void{} }()
@@ -137,15 +166,11 @@ func (rf *Raft) becomeLeader() {
 	term := <-rf.term
 
 	followerCtx := <-rf.followerCtx
-	go func() {
-		ensureClosed(followerCtx)
-		rf.followerCtx <- followerCtx
-	}()
+	ensureClosed(followerCtx)
+	go func() { rf.followerCtx <- followerCtx }()
 	candidateCtx := <-rf.candidateCtx
-	go func() {
-		ensureClosed(candidateCtx)
-		rf.candidateCtx <- candidateCtx
-	}()
+	ensureClosed(candidateCtx)
+	go func() { rf.candidateCtx <- candidateCtx }()
 
 	// must change the phase before release the term
 	go func() { rf.term <- term }()

@@ -42,6 +42,18 @@ type AEReply struct {
 	XLen int
 }
 
+type SnapshotArgs struct {
+	Term          int
+	LeaderID      int
+	Snapshot      []byte
+	SnapshotTerm  int
+	SnapshotIndex int
+}
+
+type SnapshotReply struct {
+	Term int
+}
+
 // RequestVote
 // example RequestVote RPC handler.
 //
@@ -56,10 +68,15 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 	// grant vote restriction
 	<-rf.logCh
-	lastLogIndex := len(rf.log) + rf.snapshotLastIndex
-	vote := lastLogIndex == 0
-	vote = vote || args.LastLogTerm > rf.log[lastLogIndex-1-rf.snapshotLastIndex].Term
-	vote = vote || (args.LastLogTerm == rf.log[lastLogIndex-1-rf.snapshotLastIndex].Term && args.LastLogIndex >= lastLogIndex)
+	var vote bool
+	if len(rf.log) == 0 {
+		vote = rf.snapshotLastIndex == 0
+		vote = vote || args.LastLogTerm > rf.snapshotLastTerm
+		vote = vote || (args.LastLogTerm == rf.snapshotLastTerm && args.LastLogIndex >= rf.snapshotLastIndex)
+	} else {
+		vote = args.LastLogTerm > rf.log[len(rf.log)-1].Term
+		vote = vote || (args.LastLogTerm == rf.log[len(rf.log)-1].Term && args.LastLogIndex >= len(rf.log)+rf.snapshotLastIndex)
+	}
 	go func() { rf.logCh <- void{} }()
 
 	vf := <-rf.voteFor
@@ -101,14 +118,15 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	}
 
 	if args.Term > term {
-		Debug(dTerm, rf.me, "<- AE, newer term:%v", args.Term)
+		Debug(dTerm, rf.me, "<- AE from %v, newer term:%v", args.LeaderID, args.Term)
 	} else {
-		Debug(dTerm, rf.me, "<- AE, same term: %v", args.Term)
+		Debug(dTerm, rf.me, "<- AE from %v, same term: %v", args.LeaderID, args.Term)
 	}
 
 	<-rf.voteFor
 	go func() { rf.voteFor <- args.LeaderID }()
 
+	Debug(dTerm, rf.me, "<- AE args.PrevLogIndex: %v, rf.snapshotLastIndex: %v", args.PrevLogIndex, rf.snapshotLastIndex)
 	// Logs
 	<-rf.logCh
 	reply.XLen = len(rf.log) + rf.snapshotLastIndex
@@ -121,8 +139,8 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 			reply.Success = true
 		} else {
 			reply.XTerm = rf.log[args.PrevLogIndex-1-rf.snapshotLastIndex].Term
-			reply.XIndex = 0
-			for i := args.PrevLogIndex; i >= 1; i-- {
+			reply.XIndex = rf.snapshotLastIndex
+			for i := args.PrevLogIndex; i-rf.snapshotLastIndex >= 1; i-- {
 				if rf.log[i-1-rf.snapshotLastIndex].Term != reply.XTerm {
 					reply.XIndex = i
 					break
@@ -155,4 +173,51 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		Debug(dDrop, rf.me, "<- AE, refuse update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 		go func() { rf.commitIndex <- commitIndex }()
 	}
+}
+
+func (rf *Raft) InstallSnapshot(args *SnapshotArgs, reply *SnapshotReply) {
+	term := <-rf.term
+	go func() { rf.term <- term }()
+	reply.Term = term
+	if args.Term < term {
+		return
+	}
+
+	if args.Term > term {
+		Debug(dTerm, rf.me, "<- Snapshot, newer term:%v", args.Term)
+	} else {
+		Debug(dTerm, rf.me, "<- Snapshot, same term: %v", args.Term)
+	}
+
+	<-rf.voteFor
+	go func() { rf.voteFor <- args.LeaderID }()
+	rf.electionTimer <- void{}
+
+	<-rf.logCh
+	snapshotLastIndex := rf.snapshotLastIndex
+	go func() { rf.logCh <- void{} }()
+	// although leader sends snapshot, but it's possible that follower's snapshot is newer
+	if args.SnapshotIndex > snapshotLastIndex {
+		rf.applyCh <- ApplyMsg{
+			SnapshotValid: true,
+			Snapshot:      args.Snapshot,
+			SnapshotTerm:  args.SnapshotTerm,
+			SnapshotIndex: args.SnapshotIndex,
+		}
+	}
+}
+
+func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendAE(server int, args *AEArgs, reply *AEReply) bool {
+	ok := rf.peers[server].Call("Raft.AE", args, reply)
+	return ok
+}
+
+func (rf *Raft) sendSnapshot(server int, args *SnapshotArgs, reply *SnapshotReply) bool {
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
+	return ok
 }

@@ -73,9 +73,10 @@ type Raft struct {
 	matchIndexCh  chan void
 	nextIndex     []int
 	nextIndexCh   chan void
-	// 2D
+	// 2D, protected by logCh
 	snapshotLastIndex int
 	snapshotLastTerm  int
+	snapshot          []byte
 }
 
 // Kill
@@ -192,6 +193,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		nextIndexCh:       make(chan void),
 		snapshotLastIndex: 0,
 		snapshotLastTerm:  0,
+		snapshot:          nil,
 	}
 
 	go func() { rf.term <- 0 }()
@@ -245,9 +247,7 @@ func (rf *Raft) persist(term, voteFor int) {
 
 	e.Encode(rf.log)
 	compactLogTerm := make([]TermCnt, 1)
-	if len(rf.log) > 0 {
-		compactLogTerm[0] = TermCnt{Term: rf.log[0].Term, Cnt: 1}
-	}
+	compactLogTerm[0] = TermCnt{Term: rf.snapshotLastTerm, Cnt: rf.snapshotLastIndex}
 	for i := 1; i < len(rf.log); i++ {
 		if rf.log[i].Term == rf.log[i-1].Term {
 			compactLogTerm[len(compactLogTerm)-1].Cnt += 1
@@ -298,9 +298,42 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	oldStart := rf.snapshotLastIndex
 	lastEntry := rf.log[index-1-oldStart]
 	lastTerm := lastEntry.Term
+
 	// start at index + 1 position
 	rf.log = rf.log[index+1-1-oldStart:]
 	rf.snapshotLastIndex = index
 	rf.snapshotLastTerm = lastTerm
+	rf.snapshot = snapshot
+
 	go func() { rf.logCh <- void{} }()
+}
+
+// CondInstallSnapshot
+// A service wants to switch to snapshot.  Only do so if Raft hasn't
+// more recent info since it communicate the snapshot on applyCh.
+//
+// faraway: since this snapshot is not generate by this server.
+// So lastIncludedTerm and lastIncludedIndex is needed.
+// It is called when service reply the snapshot applyCh.
+func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
+	Debug(dSnap, rf.me, "CondInstallSnapshot before index: %v", lastIncludedIndex)
+	<-rf.logCh
+	if lastIncludedIndex <= rf.snapshotLastIndex {
+		Debug(dSnap, rf.me, "CondInstallSnapshot discard %v, still use %v", lastIncludedIndex, rf.snapshotLastIndex)
+		go func() { rf.logCh <- void{} }()
+		return true
+	}
+	rf.snapshotLastTerm = lastIncludedTerm
+	rf.snapshotLastIndex = lastIncludedIndex
+	rf.snapshot = snapshot
+	// reset log
+	rf.log = make([]*Entry, 0)
+
+	lastApplied := <-rf.lastApplied
+	Debug(dSnap, rf.me, "CondInstallSnapshot lastApplied %v -> %v", lastApplied, lastIncludedIndex)
+
+	go func() { rf.logCh <- void{} }()
+	go func() { rf.lastApplied <- lastIncludedIndex }()
+
+	return true
 }

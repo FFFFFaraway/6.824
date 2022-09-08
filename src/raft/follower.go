@@ -20,15 +20,11 @@ func (rf *Raft) becomeFollower(newTerm *int, needPersist bool) {
 	}
 
 	leaderCtx := <-rf.leaderCtx
-	go func() {
-		ensureClosed(leaderCtx)
-		rf.leaderCtx <- leaderCtx
-	}()
+	ensureClosed(leaderCtx)
+	go func() { rf.leaderCtx <- leaderCtx }()
 	candidateCtx := <-rf.candidateCtx
-	go func() {
-		ensureClosed(candidateCtx)
-		rf.candidateCtx <- candidateCtx
-	}()
+	ensureClosed(candidateCtx)
+	go func() { rf.candidateCtx <- candidateCtx }()
 
 	// must change the phase before release the term
 	go func() { rf.term <- term }()
