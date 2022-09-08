@@ -7,16 +7,15 @@ import (
 // must acquire logCh and nextIndexCh before call it
 func (rf *Raft) prepare(i, term, commitIndex int) *AEArgs {
 	// recompute the AEArgs
-	oldStart := rf.snapshotLastIndex
-	oldLog := rf.log
+	start := rf.snapshotLastIndex
 	startIndex := rf.nextIndex[i]
 	prevLogTerm := rf.snapshotLastTerm
 	// if startIndex == start + 1, then preTerm == snapshotLastIndex
-	if startIndex != oldStart+1 {
+	if startIndex != start+1 {
 		// prev: -1, index to log index: -1 again, exclude snapshot: -start
-		prevLogTerm = oldLog[startIndex-1-1-oldStart].Term
+		prevLogTerm = rf.log[startIndex-1-1-start].Term
 	}
-	sendLogs := oldLog[startIndex-1-oldStart:]
+	sendLogs := rf.log[startIndex-1-start:]
 	return &AEArgs{
 		Term:         term,
 		Logs:         sendLogs,
@@ -97,6 +96,8 @@ func (rf *Raft) sendAllHB(done chan void) {
 				<-rf.logCh
 				commitIndex := <-rf.commitIndex
 				<-rf.nextIndexCh
+
+				// compute rf.nextIndex by reply
 				if reply.XTerm == -1 {
 					rf.nextIndex[i] = reply.XLen + 1
 				} else {
@@ -114,7 +115,7 @@ func (rf *Raft) sendAllHB(done chan void) {
 					}
 				}
 
-				// recompute the AEArgs
+				// use the rf.nextIndex to recompute the AEArgs
 				preparation[i] = rf.prepare(i, term, commitIndex)
 
 				go func() { rf.nextIndexCh <- void{} }()
