@@ -1,29 +1,22 @@
 package raft
 
-import (
-	"time"
-)
-
 // must acquire logCh and nextIndexCh before call it
 func (rf *Raft) prepare(done chan void, i, term, commitIndex int) *AEArgs {
 	// recompute the AEArgs
 	start := rf.snapshotLastIndex
 	startIndex := rf.nextIndex[i]
+	snapshotLastTerm := rf.snapshotLastTerm
+	snapshot := rf.snapshot
 
+	// sendOneSnapshot is out of lock, so can't use rf things like rf.snapshot
 	sendOneSnapshot := func() {
-		select {
-		case <-done:
-			return
-		default:
-		}
-
 		reply := &SnapshotReply{}
-		ok := rf.sendSnapshot(i, &SnapshotArgs{
+		ok := rf.sendSnapshot(done, i, &SnapshotArgs{
 			Term:          term,
 			LeaderID:      rf.me,
-			Snapshot:      rf.snapshot,
-			SnapshotTerm:  rf.snapshotLastTerm,
-			SnapshotIndex: rf.snapshotLastIndex,
+			Snapshot:      snapshot,
+			SnapshotTerm:  snapshotLastTerm,
+			SnapshotIndex: start,
 		}, reply)
 
 		if ok {
@@ -84,31 +77,19 @@ func (rf *Raft) sendAllHB(done chan void) {
 
 	var sendOneHB func(i int)
 	sendOneHB = func(i int) {
-		select {
-		case <-done:
-			return
-		default:
-		}
-
 		reply := &AEReply{}
-		ok := rf.sendAE(i, preparation[i], reply)
-
-		// must use the latest term
-		term := <-rf.term
-		go func() { rf.term <- term }()
-		if ok && reply.Term > term {
-			Debug(dTerm, rf.me, "command reply, newer term:%v", reply.Term)
-			rf.becomeFollower(&reply.Term, true)
-			return
-		}
-
-		select {
-		case <-done:
-			return
-		default:
-		}
-
+		ok := rf.sendAE(done, i, preparation[i], reply)
 		if ok {
+			// must use the latest term
+			term := <-rf.term
+			go func() { rf.term <- term }()
+
+			if reply.Term > term {
+				Debug(dTerm, rf.me, "command reply, newer term:%v", reply.Term)
+				rf.becomeFollower(&reply.Term, true)
+				return
+			}
+
 			if reply.Success {
 				<-rf.logCh
 				<-rf.matchIndexCh
@@ -216,11 +197,10 @@ func (rf *Raft) becomeLeader() {
 func (rf *Raft) HeartBeatLoop(done chan void) {
 	go rf.sendAllHB(done)
 	for {
-		timeout := timeoutCh(HeartBeatTimeout)
 		select {
 		case <-done:
 			return
-		case <-timeout:
+		case <-timeoutCh(HeartBeatTimeout):
 			go rf.sendAllHB(done)
 		}
 	}
@@ -231,7 +211,7 @@ func (rf *Raft) updateCommitIndex(done chan void) {
 		select {
 		case <-done:
 			return
-		default:
+		case <-timeoutCh(CommitIndexUpdateTimout):
 			term := <-rf.term
 			<-rf.logCh
 			commitIndex := <-rf.commitIndex
@@ -245,8 +225,12 @@ func (rf *Raft) updateCommitIndex(done chan void) {
 						cnt++
 					}
 				}
-				if cnt >= len(rf.peers)/2 && rf.log[max-1-rf.snapshotLastIndex].Term == term {
-					break
+				if cnt >= len(rf.peers)/2 {
+					if len(rf.log) == 0 && rf.snapshotLastTerm == term {
+						break
+					} else if rf.log[max-1-rf.snapshotLastIndex].Term == term {
+						break
+					}
 				}
 			}
 			Debug(dCommit, rf.me, "update commitIndex %v -> %v", commitIndex, max)
@@ -255,6 +239,5 @@ func (rf *Raft) updateCommitIndex(done chan void) {
 			go func() { rf.logCh <- void{} }()
 			go func() { rf.commitIndex <- max }()
 		}
-		time.Sleep(CommitIndexUpdateTimout)
 	}
 }

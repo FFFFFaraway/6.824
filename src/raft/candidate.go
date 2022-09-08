@@ -70,43 +70,27 @@ func (rf *Raft) sendAllRV() {
 	go func() { rf.candidateCtx <- done }()
 
 	sendOneRV := func(i int) {
-		// before sending, check whether candidateCtx is done
-		select {
-		case <-done:
-			return
-		default:
-		}
-
 		reply := &RequestVoteReply{}
-		ok := rf.sendRequestVote(i, &RequestVoteArgs{
+		ok := rf.sendRequestVote(done, i, &RequestVoteArgs{
 			Term:         oldTerm,
 			CandidateId:  rf.me,
 			LastLogIndex: lastLogIndex,
 			LastLogTerm:  lastLogTerm,
 		}, reply)
 
-		// term when receiving reply
-		term := <-rf.term
-		go func() { rf.term <- term }()
-		if reply.Term > term {
-			Debug(dVote, rf.me, "RV reply, newer term:%v", reply.Term)
-			rf.becomeFollower(&reply.Term, true)
-			return
-		}
-
-		// after received reply, check whether candidateCtx is done
-		// although the variable is the same done, but its content may differ
-		// The only operation to channel `done` is close(done),
-		// and it won't change the channel itself, so there also isn't a race problem
-		select {
-		case <-done:
-			return
-		default:
-		}
-
-		if ok && reply.Vote {
-			Debug(dElection, rf.me, "RV reply Vote from <- %v", i)
-			cnt <- <-cnt + 1
+		if ok {
+			// term when receiving reply
+			term := <-rf.term
+			go func() { rf.term <- term }()
+			if reply.Term > term {
+				Debug(dVote, rf.me, "RV reply, newer term:%v", reply.Term)
+				rf.becomeFollower(&reply.Term, true)
+				return
+			}
+			if reply.Vote {
+				Debug(dElection, rf.me, "RV reply Vote from <- %v", i)
+				cnt <- <-cnt + 1
+			}
 		}
 	}
 

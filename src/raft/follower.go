@@ -46,13 +46,10 @@ func (rf *Raft) becomeFollower(newTerm *int, needPersist bool) {
 // heartsbeats recently.
 func (rf *Raft) ticker() {
 	for {
-		span := rand.Intn(ElectionTimeoutRandomRange)
-		timeout := timeoutCh(ElectionTimeoutStart + time.Duration(span)*time.Millisecond)
-
 		select {
 		case <-rf.dead:
 			return
-		case <-timeout:
+		case <-timeoutCh(ElectionTimeoutStart + time.Duration(rand.Intn(ElectionTimeoutRandomRange))*time.Millisecond):
 			rf.becomeCandidate()
 			return
 		// suppress the electionTimer button by AE or RV or heartbeat

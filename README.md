@@ -4,11 +4,11 @@ implemented by purely unbuffered channel
 TODO List:
 
 - [x] Lab 1: MapReduce
-- [ ] Lab 2: Raft
+- [x] Lab 2: Raft
   - [x] Part 2A
   - [x] Part 2B
   - [x] Part 2C
-  - [ ] Part 2D
+  - [x] Part 2D
 - [ ] Lab 3: Fault-tolerant Key/Value Service
   - [ ] Part 3A
   - [ ] Part 3B

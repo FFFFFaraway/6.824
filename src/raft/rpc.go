@@ -59,10 +59,10 @@ type SnapshotReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	term := <-rf.term
-	go func() { rf.term <- term }()
 
 	reply.Term = term
 	if args.Term < term {
+		go func() { rf.term <- term }()
 		return
 	}
 
@@ -95,6 +95,11 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		reply.Vote = true
 	}
 
+	// need to be close to the rf.becomeFollower
+	// If a server receive 2 RV request at the same time, and both have newer term.
+	// We expect that one RV call rf.becomeFollower, and the other one use the changed term.
+	go func() { rf.term <- term }()
+
 	if args.Term > term {
 		Debug(dTerm, rf.me, "<- RV from S%v, newer term:%v", args.CandidateId, args.Term)
 		rf.becomeFollower(&args.Term, true)
@@ -111,9 +116,9 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	term := <-rf.term
-	go func() { rf.term <- term }()
 	reply.Term = term
 	if args.Term < term {
+		go func() { rf.term <- term }()
 		return
 	}
 
@@ -129,10 +134,18 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	// Logs
 	<-rf.logCh
 	reply.XLen = len(rf.log) + rf.snapshotLastIndex
+
 	if reply.XLen >= args.PrevLogIndex {
-		if args.PrevLogIndex-rf.snapshotLastIndex == 0 {
-			rf.log = args.Logs
-			reply.Success = true
+		if args.PrevLogIndex <= rf.snapshotLastIndex {
+			// the prevLog is the snapshot, then copy the logs
+			if args.PrevLogTerm == rf.snapshotLastTerm {
+				rf.log = args.Logs
+				reply.Success = true
+			} else {
+				Debug(dError, rf.me, "Snapshot Error, mismatch!")
+				reply.XTerm = rf.snapshotLastTerm
+				reply.XIndex = 0
+			}
 		} else if rf.log[args.PrevLogIndex-1-rf.snapshotLastIndex].Term == args.PrevLogTerm {
 			rf.log = append(rf.log[:args.PrevLogIndex-rf.snapshotLastIndex], args.Logs...)
 			reply.Success = true
@@ -147,6 +160,7 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 			}
 		}
 	} else {
+		// the PrevLogIndex position has no log yet
 		reply.XTerm = -1
 	}
 	go func() { rf.logCh <- void{} }()
@@ -154,6 +168,8 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	if !reply.Success {
 		Debug(dApply, rf.me, "AE fail, XTerm: %v, XIndex: %v, XLen: %v", reply.XTerm, reply.XIndex, reply.XLen)
 	}
+
+	go func() { rf.term <- term }()
 
 	// persist after log have been copied
 	rf.becomeFollower(&args.Term, len(args.Logs) > 0)
@@ -206,17 +222,27 @@ func (rf *Raft) InstallSnapshot(args *SnapshotArgs, reply *SnapshotReply) {
 	}
 }
 
-func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
-	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
-	return ok
+func isAlive(done chan void) bool {
+	select {
+	case <-done:
+		return false
+	default:
+	}
+	return true
 }
 
-func (rf *Raft) sendAE(server int, args *AEArgs, reply *AEReply) bool {
-	ok := rf.peers[server].Call("Raft.AE", args, reply)
-	return ok
+// if before sending or after sending, the context is done, then return false
+// although the variable is the same done, but its content may differ
+// The only operation to channel `done` is close(done),
+// and it won't change the channel itself, so there also isn't a race problem
+func (rf *Raft) sendRequestVote(done chan void, server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
+	return isAlive(done) && rf.peers[server].Call("Raft.RequestVote", args, reply) && isAlive(done)
 }
 
-func (rf *Raft) sendSnapshot(server int, args *SnapshotArgs, reply *SnapshotReply) bool {
-	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
-	return ok
+func (rf *Raft) sendAE(done chan void, server int, args *AEArgs, reply *AEReply) bool {
+	return isAlive(done) && rf.peers[server].Call("Raft.AE", args, reply) && isAlive(done)
+}
+
+func (rf *Raft) sendSnapshot(done chan void, server int, args *SnapshotArgs, reply *SnapshotReply) bool {
+	return isAlive(done) && rf.peers[server].Call("Raft.InstallSnapshot", args, reply) && isAlive(done)
 }
