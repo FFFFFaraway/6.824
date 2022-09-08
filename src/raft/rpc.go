@@ -156,7 +156,7 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	}
 
 	// persist after log have been copied
-	rf.becomeFollower(&args.Term, true)
+	rf.becomeFollower(&args.Term, len(args.Logs) > 0)
 	rf.electionTimer <- void{}
 
 	commitIndex := <-rf.commitIndex
