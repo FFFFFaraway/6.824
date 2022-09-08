@@ -64,7 +64,7 @@ fi
 parallelism=128
 
 # Default to no test filtering unless otherwise specified
-test="SnapshotInstall2D"
+test="2D"
 if [ $# -gt 2 ]; then
 	test="$3"
 fi

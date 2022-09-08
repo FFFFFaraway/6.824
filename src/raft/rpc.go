@@ -126,7 +126,6 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	<-rf.voteFor
 	go func() { rf.voteFor <- args.LeaderID }()
 
-	Debug(dTerm, rf.me, "<- AE args.PrevLogIndex: %v, rf.snapshotLastIndex: %v", args.PrevLogIndex, rf.snapshotLastIndex)
 	// Logs
 	<-rf.logCh
 	reply.XLen = len(rf.log) + rf.snapshotLastIndex

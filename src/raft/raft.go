@@ -198,8 +198,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	go func() { rf.term <- 0 }()
 	go func() { rf.logCh <- void{} }()
-	go func() { rf.commitIndex <- 0 }()
-	go func() { rf.lastApplied <- 0 }()
 	go func() { rf.voteFor <- -1 }()
 	go func() { rf.matchIndexCh <- void{} }()
 	go func() { rf.nextIndexCh <- void{} }()
@@ -221,6 +219,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
+	rf.readSnapshot(persister.ReadSnapshot())
+	<-rf.logCh
+	go func() { rf.commitIndex <- rf.snapshotLastIndex }()
+	go func() { rf.lastApplied <- rf.snapshotLastIndex }()
+	go func() { rf.logCh <- void{} }()
 
 	go rf.applier()
 	rf.becomeFollower(nil, false)
@@ -255,9 +258,11 @@ func (rf *Raft) persist(term, voteFor int) {
 			compactLogTerm = append(compactLogTerm, TermCnt{Term: rf.log[i].Term, Cnt: 1})
 		}
 	}
-	go func() { rf.logCh <- void{} }()
 	e.Encode(term)
 	e.Encode(voteFor)
+	e.Encode(rf.snapshotLastIndex)
+	e.Encode(rf.snapshotLastTerm)
+	go func() { rf.logCh <- void{} }()
 	data := w.Bytes()
 	rf.persister.SaveRaftState(data)
 	Debug(dPersist, rf.me, "logTerm: %v, term: %v", compactLogTerm, term)
@@ -278,11 +283,11 @@ func (rf *Raft) readPersist(data []byte) {
 	d := labgob.NewDecoder(r)
 	var term int
 	var voteFor int
-	if d.Decode(&rf.log) != nil || d.Decode(&term) != nil || d.Decode(&voteFor) != nil {
-		panic("readPersist error")
-	}
-	Debug(dPersist, rf.me, "len(log): %v, term: %v, voteFor: %v", len(rf.log), term, voteFor)
-
+	d.Decode(&rf.log)
+	d.Decode(&term)
+	d.Decode(&voteFor)
+	d.Decode(&rf.snapshotLastIndex)
+	d.Decode(&rf.snapshotLastTerm)
 	go func() { rf.term <- term }()
 	go func() { rf.voteFor <- voteFor }()
 	go func() { rf.logCh <- void{} }()
@@ -304,8 +309,8 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.snapshotLastIndex = index
 	rf.snapshotLastTerm = lastTerm
 	rf.snapshot = snapshot
-
 	go func() { rf.logCh <- void{} }()
+	rf.persistSnapshot(snapshot)
 }
 
 // CondInstallSnapshot
@@ -334,6 +339,37 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 	go func() { rf.logCh <- void{} }()
 	go func() { rf.lastApplied <- lastIncludedIndex }()
-
+	rf.persistSnapshot(snapshot)
 	return true
+}
+
+func (rf *Raft) readSnapshot(data []byte) {
+	if data == nil || len(data) < 1 { // bootstrap without snapshot
+		return
+	}
+	<-rf.logCh
+	rf.snapshot = data
+	go func() { rf.logCh <- void{} }()
+}
+
+func (rf *Raft) persistSnapshot(snapshot []byte) {
+	w := new(bytes.Buffer)
+	e := labgob.NewEncoder(w)
+
+	term := <-rf.term
+	voteFor := <-rf.voteFor
+	<-rf.logCh
+
+	e.Encode(term)
+	e.Encode(voteFor)
+	e.Encode(rf.log)
+	e.Encode(rf.snapshotLastIndex)
+	e.Encode(rf.snapshotLastTerm)
+
+	go func() { rf.term <- term }()
+	go func() { rf.voteFor <- voteFor }()
+	go func() { rf.logCh <- void{} }()
+
+	data := w.Bytes()
+	rf.persister.SaveStateAndSnapshot(data, snapshot)
 }
