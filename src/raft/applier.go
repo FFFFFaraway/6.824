@@ -13,11 +13,10 @@ func (rf *Raft) applier() {
 		commitIndex := <-rf.commitIndex
 		go func() { rf.commitIndex <- commitIndex }()
 
-		lastApplied := <-rf.lastApplied
-		go func() { rf.lastApplied <- lastApplied }()
-
 		<-rf.logCh
+		lastApplied := <-rf.lastApplied
 		cnt := 0
+
 	tryLoop:
 		for i := lastApplied + 1; i <= commitIndex; i++ {
 			Debug(dApply, rf.me, "apply %v, command: %v", i, rf.log[i-1-rf.snapshotLastIndex].Command)
@@ -28,13 +27,13 @@ func (rf *Raft) applier() {
 				CommandIndex: i,
 			}:
 				cnt += 1
-			default:
+			case <-timeoutCh(ApplierSelectWait):
 				Debug(dApply, rf.me, "applyCh failed %v, command: %v", i, rf.log[i-1-rf.snapshotLastIndex].Command)
 				break tryLoop
 			}
 		}
 		go func() { rf.logCh <- void{} }()
-		go func() { rf.lastApplied <- <-rf.lastApplied + cnt }()
+		go func() { rf.lastApplied <- lastApplied + cnt }()
 
 		time.Sleep(ApplierSleepTimeout)
 	}
