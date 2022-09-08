@@ -36,6 +36,7 @@ func (rf *Raft) becomeCandidate() {
 		Debug(dPhase, rf.me, "become Candidate %v", term)
 	default:
 		Debug(dPhase, rf.me, "Already Candidate, start newer term election")
+		ensureClosed(done)
 	}
 	go func() { rf.candidateCtx <- make(chan void) }()
 	rf.sendAllRV()
@@ -52,9 +53,11 @@ func (rf *Raft) sendAllRV() {
 	span := rand.Intn(ElectionTimeoutRandomRange)
 	timeout := timeoutCh(ElectionTimeoutStart + time.Duration(span)*time.Millisecond)
 
-	term := <-rf.term
-	go func() { rf.term <- term }()
+	// when sending RV, the term of candidate
+	oldTerm := <-rf.term
+	go func() { rf.term <- oldTerm }()
 
+	// calculate the lastLogIndex and lastLogTerm for every sending goroutine
 	<-rf.logCh
 	lastLogIndex := len(rf.log) + rf.snapshotLastIndex
 	lastLogTerm := rf.snapshotLastTerm
@@ -63,54 +66,64 @@ func (rf *Raft) sendAllRV() {
 	}
 	go func() { rf.logCh <- void{} }()
 
-	go func() { cnt <- 0 }()
-	for i := range rf.peers {
-		if i != rf.me {
-			go func(i int) {
-				before := <-rf.candidateCtx
-				go func() { rf.candidateCtx <- before }()
-				select {
-				case <-before:
-					return
-				default:
-				}
+	// can multiple goroutine use global one candidateCtx?
+	// close won't change the channel itself, but make(chan) will.
+	// so before make a new one, ensure last one is closed.
+	done := <-rf.candidateCtx
+	go func() { rf.candidateCtx <- done }()
 
-				reply := &RequestVoteReply{}
-				ok := rf.sendRequestVote(i, &RequestVoteArgs{
-					Term:         term,
-					CandidateId:  rf.me,
-					LastLogIndex: lastLogIndex,
-					LastLogTerm:  lastLogTerm,
-				}, reply)
+	sendOneRV := func(i int) {
+		// before sending, check whether candidateCtx is done
+		select {
+		case <-done:
+			return
+		default:
+		}
 
-				term := <-rf.term
-				go func() { rf.term <- term }()
-				if reply.Term > term {
-					Debug(dVote, rf.me, "RV reply, newer term:%v", reply.Term)
-					rf.becomeFollower(&reply.Term, true)
-					return
-				}
+		reply := &RequestVoteReply{}
+		ok := rf.sendRequestVote(i, &RequestVoteArgs{
+			Term:         oldTerm,
+			CandidateId:  rf.me,
+			LastLogIndex: lastLogIndex,
+			LastLogTerm:  lastLogTerm,
+		}, reply)
 
-				done := <-rf.candidateCtx
-				go func() { rf.candidateCtx <- done }()
-				select {
-				case <-done:
-					return
-				default:
-				}
+		// term when receiving reply
+		term := <-rf.term
+		go func() { rf.term <- term }()
+		if reply.Term > term {
+			Debug(dVote, rf.me, "RV reply, newer term:%v", reply.Term)
+			rf.becomeFollower(&reply.Term, true)
+			return
+		}
 
-				if ok && reply.Vote {
-					Debug(dElection, rf.me, "RV reply Vote from <- %v", i)
-					cnt <- <-cnt + 1
-				}
-			}(i)
+		// after received reply, check whether candidateCtx is done
+		// although the variable is the same done, but its content may differ
+		// The only operation to channel `done` is close(done),
+		// and it won't change the channel itself, so there also isn't a race problem
+		select {
+		case <-done:
+			return
+		default:
+		}
+
+		if ok && reply.Vote {
+			Debug(dElection, rf.me, "RV reply Vote from <- %v", i)
+			cnt <- <-cnt + 1
 		}
 	}
-	// periodically check if cnt satisfy the need
+
+	go func() { cnt <- 0 }()
+
+	for i := range rf.peers {
+		if i != rf.me {
+			go sendOneRV(i)
+		}
+	}
+
+	// wait reply and check whether vote count satisfy the need
 	go func() {
 		for {
-			done := <-rf.candidateCtx
-			go func() { rf.candidateCtx <- done }()
 			select {
 			case c := <-cnt:
 				if c >= need {
@@ -125,12 +138,9 @@ func (rf *Raft) sendAllRV() {
 		}
 	}()
 
-	done := <-rf.candidateCtx
-	go func() { rf.candidateCtx <- done }()
 	select {
 	case <-suc:
 		Debug(dElection, rf.me, "election success")
-		// must use add go to call the cancel func quickly
 		rf.becomeLeader()
 	case <-done:
 		Debug(dElection, rf.me, "election fail, canceled")

@@ -4,17 +4,12 @@ import (
 	"time"
 )
 
-func (rf *Raft) sendOneHB(i, oldTerm int) {
-	commitIndex := <-rf.commitIndex
-	go func() { rf.commitIndex <- commitIndex }()
-
-	<-rf.nextIndexCh
-	startIndex := rf.nextIndex[i]
-	go func() { rf.nextIndexCh <- void{} }()
-
-	<-rf.logCh
+// must acquire logCh and nextIndexCh before call it
+func (rf *Raft) prepare(i, term, commitIndex int) *AEArgs {
+	// recompute the AEArgs
 	oldStart := rf.snapshotLastIndex
 	oldLog := rf.log
+	startIndex := rf.nextIndex[i]
 	prevLogTerm := rf.snapshotLastTerm
 	// if startIndex == start + 1, then preTerm == snapshotLastIndex
 	if startIndex != oldStart+1 {
@@ -22,93 +17,117 @@ func (rf *Raft) sendOneHB(i, oldTerm int) {
 		prevLogTerm = oldLog[startIndex-1-1-oldStart].Term
 	}
 	sendLogs := oldLog[startIndex-1-oldStart:]
-	go func() { rf.logCh <- void{} }()
-
-	// before send check once more
-	leaderDone := <-rf.leaderCtx
-	go func() { rf.leaderCtx <- leaderDone }()
-
-	select {
-	case <-leaderDone:
-		return
-	default:
-	}
-
-	reply := &AEReply{}
-	ok := rf.sendAE(i, &AEArgs{
-		Term:         oldTerm,
+	return &AEArgs{
+		Term:         term,
 		Logs:         sendLogs,
 		CommitIndex:  commitIndex,
 		LeaderID:     rf.me,
 		PrevLogIndex: startIndex - 1,
 		PrevLogTerm:  prevLogTerm,
-	}, reply)
-
-	// must use the latest term
-	term := <-rf.term
-	go func() { rf.term <- term }()
-	if ok && reply.Term > term {
-		Debug(dTerm, rf.me, "command reply, newer term:%v", reply.Term)
-		rf.becomeFollower(&reply.Term, true)
-		return
-	}
-
-	done := <-rf.leaderCtx
-	go func() { rf.leaderCtx <- done }()
-
-	select {
-	case <-done:
-		return
-	default:
-	}
-
-	<-rf.logCh
-	log := rf.log
-	go func() { rf.logCh <- void{} }()
-
-	if ok {
-		if reply.Success {
-			<-rf.matchIndexCh
-			rf.matchIndex[i] = len(oldLog) + oldStart
-			go func() { rf.matchIndexCh <- void{} }()
-			<-rf.nextIndexCh
-			rf.nextIndex[i] = len(log) + 1 + rf.snapshotLastIndex
-			go func() { rf.nextIndexCh <- void{} }()
-		} else {
-			Debug(dTerm, rf.me, "HB reply with fail, XTerm: %v, XIndex: %v, XLen: %v", reply.XTerm, reply.XIndex, reply.XLen)
-			<-rf.logCh
-			<-rf.nextIndexCh
-			if reply.XTerm == -1 {
-				rf.nextIndex[i] = reply.XLen + 1
-			} else {
-				tailIndex := -1
-				for index := rf.nextIndex[i] - 1; index >= 1 && rf.log[index-1-rf.snapshotLastIndex].Term > reply.XTerm; index-- {
-					if rf.log[index-1-rf.snapshotLastIndex].Term == reply.XTerm {
-						tailIndex = index
-						break
-					}
-				}
-				if tailIndex != -1 {
-					rf.nextIndex[i] = tailIndex + 1
-				} else {
-					rf.nextIndex[i] = reply.XIndex + 1
-				}
-			}
-			go func() { rf.nextIndexCh <- void{} }()
-			go func() { rf.logCh <- void{} }()
-			rf.sendOneHB(i, oldTerm)
-		}
 	}
 }
 
-func (rf *Raft) sendAllHB() {
-	term := <-rf.term
-	go func() { rf.term <- term }()
-	Debug(dLeader, rf.me, "send out HB, term %v", term)
+func (rf *Raft) sendAllHB(done chan void) {
+	oldTerm := <-rf.term
+	go func() { rf.term <- oldTerm }()
+	Debug(dLeader, rf.me, "send out HB, term %v", oldTerm)
+
+	// ###### prepare information for child goroutine to send ######
+	// so that child goroutines don't have to acquire the resources
+	preparation := make([]*AEArgs, len(rf.peers))
+
+	<-rf.logCh
+	oldCommitIndex := <-rf.commitIndex
+	<-rf.nextIndexCh
+
+	oldStart := rf.snapshotLastIndex
+	oldLog := rf.log
+	for i := range rf.peers {
+		if i != rf.me {
+			preparation[i] = rf.prepare(i, oldTerm, oldCommitIndex)
+		}
+	}
+
+	// release order doesn't matter
+	go func() { rf.logCh <- void{} }()
+	go func() { rf.nextIndexCh <- void{} }()
+	go func() { rf.commitIndex <- oldCommitIndex }()
+	// ###### preparation done ######
+
+	var sendOneHB func(i int)
+	sendOneHB = func(i int) {
+		select {
+		case <-done:
+			return
+		default:
+		}
+
+		reply := &AEReply{}
+		ok := rf.sendAE(i, preparation[i], reply)
+
+		// must use the latest term
+		term := <-rf.term
+		go func() { rf.term <- term }()
+		if ok && reply.Term > term {
+			Debug(dTerm, rf.me, "command reply, newer term:%v", reply.Term)
+			rf.becomeFollower(&reply.Term, true)
+			return
+		}
+
+		select {
+		case <-done:
+			return
+		default:
+		}
+
+		if ok {
+			if reply.Success {
+				<-rf.logCh
+				<-rf.matchIndexCh
+				<-rf.nextIndexCh
+
+				rf.matchIndex[i] = len(oldLog) + oldStart
+				rf.nextIndex[i] = len(rf.log) + 1 + rf.snapshotLastIndex
+
+				go func() { rf.logCh <- void{} }()
+				go func() { rf.matchIndexCh <- void{} }()
+				go func() { rf.nextIndexCh <- void{} }()
+			} else {
+				Debug(dTerm, rf.me, "HB reply with fail, XTerm: %v, XIndex: %v, XLen: %v", reply.XTerm, reply.XIndex, reply.XLen)
+				<-rf.logCh
+				commitIndex := <-rf.commitIndex
+				<-rf.nextIndexCh
+				if reply.XTerm == -1 {
+					rf.nextIndex[i] = reply.XLen + 1
+				} else {
+					tailIndex := -1
+					for index := rf.nextIndex[i] - 1; index >= 1 && rf.log[index-1-rf.snapshotLastIndex].Term > reply.XTerm; index-- {
+						if rf.log[index-1-rf.snapshotLastIndex].Term == reply.XTerm {
+							tailIndex = index
+							break
+						}
+					}
+					if tailIndex != -1 {
+						rf.nextIndex[i] = tailIndex + 1
+					} else {
+						rf.nextIndex[i] = reply.XIndex + 1
+					}
+				}
+
+				// recompute the AEArgs
+				preparation[i] = rf.prepare(i, term, commitIndex)
+
+				go func() { rf.nextIndexCh <- void{} }()
+				go func() { rf.logCh <- void{} }()
+				go func() { rf.commitIndex <- commitIndex }()
+				sendOneHB(i)
+			}
+		}
+	}
 
 	for i := range rf.peers {
 		if i != rf.me {
-			go rf.sendOneHB(i, term)
+			go sendOneHB(i)
 		}
 	}
 }
@@ -131,12 +150,12 @@ func (rf *Raft) becomeLeader() {
 	go func() { rf.term <- term }()
 
 	// reopen the leaderCtx
-	done := <-rf.leaderCtx
+	oldDone := <-rf.leaderCtx
 	select {
-	case <-done:
+	case <-oldDone:
 		go func() { rf.leaderCtx <- make(chan void) }()
 	default:
-		go func() { rf.leaderCtx <- done }()
+		go func() { rf.leaderCtx <- oldDone }()
 		Debug(dError, rf.me, "Already Leader!!!")
 		return
 	}
@@ -158,34 +177,31 @@ func (rf *Raft) becomeLeader() {
 	}
 	go func() { rf.nextIndexCh <- void{} }()
 
-	go rf.HeartBeatLoop()
-	go rf.updateCommitIndex()
+	// don't use the oldDone, which belongs to last term
+	done := <-rf.leaderCtx
+	go func() { rf.leaderCtx <- done }()
+
+	go rf.HeartBeatLoop(done)
+	go rf.updateCommitIndex(done)
 
 	Debug(dPhase, rf.me, "become Leader %v", term)
 }
 
-func (rf *Raft) HeartBeatLoop() {
-	go rf.sendAllHB()
+func (rf *Raft) HeartBeatLoop(done chan void) {
+	go rf.sendAllHB(done)
 	for {
 		timeout := timeoutCh(HeartBeatTimeout)
-
-		done := <-rf.leaderCtx
-		go func() { rf.leaderCtx <- done }()
-
 		select {
 		case <-done:
 			return
 		case <-timeout:
-			go rf.sendAllHB()
+			go rf.sendAllHB(done)
 		}
 	}
 }
 
-func (rf *Raft) updateCommitIndex() {
+func (rf *Raft) updateCommitIndex(done chan void) {
 	for {
-		done := <-rf.leaderCtx
-		go func() { rf.leaderCtx <- done }()
-
 		select {
 		case <-done:
 			return
@@ -213,6 +229,6 @@ func (rf *Raft) updateCommitIndex() {
 			go func() { rf.logCh <- void{} }()
 			go func() { rf.commitIndex <- max }()
 		}
-		time.Sleep(ApplierSleepTimeout)
+		time.Sleep(CommitIndexUpdateTimout)
 	}
 }

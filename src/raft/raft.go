@@ -44,6 +44,8 @@ const (
 	ElectionTimeoutStart       = 300 * time.Millisecond
 	ElectionTimeoutRandomRange = 300 // time.Millisecond
 	ApplierSleepTimeout        = 100 * time.Millisecond
+	ApplierSelectWait          = time.Millisecond
+	CommitIndexUpdateTimout    = 100 * time.Millisecond
 )
 
 // Raft
@@ -55,6 +57,7 @@ type Raft struct {
 	me        int                 // this peer's index into peers[]
 	dead      chan void           // set by Kill()
 
+	// the order of channel definition is the order of acquirement, to avoid deadlock
 	electionTimer chan void
 	term          chan int
 	voteFor       chan int
