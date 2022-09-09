@@ -152,6 +152,10 @@ func (rf *Raft) becomeLeader() {
 	candidateCtx := <-rf.candidateCtx
 	ensureClosed(candidateCtx)
 	go func() { rf.candidateCtx <- candidateCtx }()
+	// only leader can stop the ticker
+	tickerCtx := <-rf.tickerCtx
+	ensureClosed(tickerCtx)
+	go func() { rf.tickerCtx <- tickerCtx }()
 
 	// must change the phase before release the term
 	go func() { rf.term <- term }()

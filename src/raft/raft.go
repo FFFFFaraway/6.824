@@ -67,6 +67,7 @@ type Raft struct {
 	leaderCtx     chan chan void
 	candidateCtx  chan chan void
 	followerCtx   chan chan void
+	tickerCtx     chan chan void
 	commitIndex   chan int
 	lastApplied   chan int
 	matchIndex    []int
@@ -185,6 +186,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		leaderCtx:         make(chan chan void),
 		candidateCtx:      make(chan chan void),
 		followerCtx:       make(chan chan void),
+		tickerCtx:         make(chan chan void),
 		commitIndex:       make(chan int),
 		lastApplied:       make(chan int),
 		matchIndex:        make([]int, len(peers)),
@@ -215,6 +217,11 @@ func Make(peers []*labrpc.ClientEnd, me int,
 		c := make(chan void)
 		ensureClosed(c)
 		rf.followerCtx <- c
+	}()
+	go func() {
+		c := make(chan void)
+		ensureClosed(c)
+		rf.tickerCtx <- c
 	}()
 
 	// initialize from state persisted before a crash

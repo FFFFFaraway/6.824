@@ -1,10 +1,5 @@
 package raft
 
-import (
-	"math/rand"
-	"time"
-)
-
 func (rf *Raft) becomeCandidate() {
 	term := <-rf.term
 	vf := <-rf.voteFor
@@ -23,9 +18,9 @@ func (rf *Raft) becomeCandidate() {
 	go func() { rf.term <- term }()
 
 	// ensure the candidateCtx is alive
-	done := <-rf.candidateCtx
+	oldCandidateCtx := <-rf.candidateCtx
 	select {
-	case <-done:
+	case <-oldCandidateCtx:
 		// leader vote for self
 		<-rf.voteFor
 		go func() { rf.voteFor <- rf.me }()
@@ -33,22 +28,24 @@ func (rf *Raft) becomeCandidate() {
 	default:
 		Debug(dPhase, rf.me, "Already Candidate, start newer term election")
 		// exit all goroutine in last term
-		ensureClosed(done)
+		ensureClosed(oldCandidateCtx)
 	}
-	go func() { rf.candidateCtx <- make(chan void) }()
-	rf.sendAllRV()
+
+	// can multiple goroutine use global one candidateCtx?
+	// close won't change the channel itself, but make(chan) will.
+	// so before make a new one, ensure last one is closed.
+	candidateCtx := make(chan void)
+	go func() { rf.candidateCtx <- candidateCtx }()
+	rf.sendAllRV(candidateCtx)
 }
 
-func (rf *Raft) sendAllRV() {
+func (rf *Raft) sendAllRV(done chan void) {
 	// counter for received vote
 	cnt := make(chan int)
 	// add self
 	need := len(rf.peers) / 2
 	// whether the received vote satisfy need
 	suc := make(chan void)
-
-	span := rand.Intn(ElectionTimeoutRandomRange)
-	timeout := timeoutCh(ElectionTimeoutStart + time.Duration(span)*time.Millisecond)
 
 	// when sending RV, the term of candidate
 	oldTerm := <-rf.term
@@ -62,12 +59,6 @@ func (rf *Raft) sendAllRV() {
 		lastLogTerm = rf.log[len(rf.log)-1].Term
 	}
 	go func() { rf.logCh <- void{} }()
-
-	// can multiple goroutine use global one candidateCtx?
-	// close won't change the channel itself, but make(chan) will.
-	// so before make a new one, ensure last one is closed.
-	done := <-rf.candidateCtx
-	go func() { rf.candidateCtx <- done }()
 
 	sendOneRV := func(i int) {
 		reply := &RequestVoteReply{}
@@ -126,8 +117,5 @@ func (rf *Raft) sendAllRV() {
 	case <-done:
 		Debug(dElection, rf.me, "election fail, canceled")
 		rf.becomeFollower(nil, false)
-	case <-timeout:
-		Debug(dElection, rf.me, "election fail, timeout")
-		rf.becomeCandidate()
 	}
 }

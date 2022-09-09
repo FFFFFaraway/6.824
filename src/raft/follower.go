@@ -34,24 +34,36 @@ func (rf *Raft) becomeFollower(newTerm *int, needPersist bool) {
 	select {
 	case <-done:
 		go func() { rf.followerCtx <- make(chan void) }()
-		go rf.ticker()
 		Debug(dPhase, rf.me, "become Follower %v", term)
 	default:
 		go func() { rf.followerCtx <- done }()
 		Debug(dDrop, rf.me, "Already Follower")
+		return
+	}
+
+	// ensure the tickerCtx is alive
+	oldTickerDone := <-rf.tickerCtx
+	select {
+	case <-oldTickerDone:
+		tickerDone := make(chan void)
+		go func() { rf.tickerCtx <- tickerDone }()
+		go rf.ticker(tickerDone)
+	default:
+		go func() { rf.tickerCtx <- oldTickerDone }()
 	}
 }
 
 // The ticker go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
-func (rf *Raft) ticker() {
+func (rf *Raft) ticker(done chan void) {
 	for {
 		select {
 		case <-rf.dead:
 			return
-		case <-timeoutCh(ElectionTimeoutStart + time.Duration(rand.Intn(ElectionTimeoutRandomRange))*time.Millisecond):
-			rf.becomeCandidate()
+		case <-done:
 			return
+		case <-timeoutCh(ElectionTimeoutStart + time.Duration(rand.Intn(ElectionTimeoutRandomRange))*time.Millisecond):
+			go rf.becomeCandidate()
 		// suppress the electionTimer button by AE or RV or heartbeat
 		case <-rf.electionTimer:
 		}
