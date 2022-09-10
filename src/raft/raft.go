@@ -233,7 +233,8 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	go func() { rf.logCh <- void{} }()
 
 	go rf.applier()
-	rf.becomeFollower(nil, false)
+	term := <-rf.term
+	rf.becomeFollower(term, nil, false)
 	go rf.cleaner()
 
 	return rf
@@ -258,6 +259,9 @@ func (rf *Raft) persist(term, voteFor int) {
 	e.Encode(rf.log)
 	compactLogTerm := make([]TermCnt, 1)
 	compactLogTerm[0] = TermCnt{Term: rf.snapshotLastTerm, Cnt: rf.snapshotLastIndex}
+	if len(rf.log) > 0 {
+		compactLogTerm = append(compactLogTerm, TermCnt{Term: rf.log[0].Term, Cnt: 1})
+	}
 	for i := 1; i < len(rf.log); i++ {
 		if rf.log[i].Term == rf.log[i-1].Term {
 			compactLogTerm[len(compactLogTerm)-1].Cnt += 1

@@ -82,13 +82,13 @@ func (rf *Raft) sendAllHB(done chan void) {
 		if ok {
 			// must use the latest term
 			term := <-rf.term
-			go func() { rf.term <- term }()
 
 			if reply.Term > term {
 				Debug(dTerm, rf.me, "command reply, newer term:%v", reply.Term)
-				rf.becomeFollower(&reply.Term, true)
+				rf.becomeFollower(term, &reply.Term, true)
 				return
 			}
+			go func() { rf.term <- term }()
 
 			if reply.Success {
 				<-rf.logCh
@@ -160,16 +160,19 @@ func (rf *Raft) becomeLeader() {
 	// must change the phase before release the term
 	go func() { rf.term <- term }()
 
-	// reopen the leaderCtx
 	oldDone := <-rf.leaderCtx
 	select {
 	case <-oldDone:
-		go func() { rf.leaderCtx <- make(chan void) }()
+		Debug(dPhase, rf.me, "become Leader %v", term)
 	default:
 		go func() { rf.leaderCtx <- oldDone }()
 		Debug(dError, rf.me, "Already Leader!!!")
 		return
 	}
+	// don't use the oldDone, which belongs to last term
+	// reopen the leaderCtx
+	done := make(chan void)
+	go func() { rf.leaderCtx <- done }()
 
 	<-rf.matchIndexCh
 	for i := range rf.matchIndex {
@@ -188,14 +191,8 @@ func (rf *Raft) becomeLeader() {
 	}
 	go func() { rf.nextIndexCh <- void{} }()
 
-	// don't use the oldDone, which belongs to last term
-	done := <-rf.leaderCtx
-	go func() { rf.leaderCtx <- done }()
-
 	go rf.HeartBeatLoop(done)
 	go rf.updateCommitIndex(done)
-
-	Debug(dPhase, rf.me, "become Leader %v", term)
 }
 
 func (rf *Raft) HeartBeatLoop(done chan void) {
@@ -220,6 +217,8 @@ func (rf *Raft) updateCommitIndex(done chan void) {
 			<-rf.logCh
 			commitIndex := <-rf.commitIndex
 			<-rf.matchIndexCh
+
+			Debug(dCommit, rf.me, "before update commitIndex, rf.matchIndex: %v", rf.matchIndex)
 
 			var max int
 			for max = len(rf.log) + rf.snapshotLastIndex; max >= commitIndex+1; max-- {

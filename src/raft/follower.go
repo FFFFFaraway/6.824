@@ -6,8 +6,8 @@ import (
 )
 
 // make ensure multiple call will create only one follower
-func (rf *Raft) becomeFollower(newTerm *int, needPersist bool) {
-	term := <-rf.term
+// it should be called with term locked
+func (rf *Raft) becomeFollower(term int, newTerm *int, needPersist bool) {
 	vf := <-rf.voteFor
 	go func() { rf.voteFor <- vf }()
 
@@ -30,16 +30,17 @@ func (rf *Raft) becomeFollower(newTerm *int, needPersist bool) {
 	go func() { rf.term <- term }()
 
 	// ensure the followerCtx is alive
-	done := <-rf.followerCtx
+	oldDone := <-rf.followerCtx
 	select {
-	case <-done:
-		go func() { rf.followerCtx <- make(chan void) }()
+	case <-oldDone:
 		Debug(dPhase, rf.me, "become Follower %v", term)
 	default:
-		go func() { rf.followerCtx <- done }()
+		go func() { rf.followerCtx <- oldDone }()
 		Debug(dDrop, rf.me, "Already Follower")
 		return
 	}
+	done := make(chan void)
+	go func() { rf.followerCtx <- done }()
 
 	// ensure the tickerCtx is alive
 	oldTickerDone := <-rf.tickerCtx

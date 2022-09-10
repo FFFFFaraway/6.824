@@ -98,12 +98,14 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// need to be close to the rf.becomeFollower
 	// If a server receive 2 RV request at the same time, and both have newer term.
 	// We expect that one RV call rf.becomeFollower, and the other one use the changed term.
-	go func() { rf.term <- term }()
+	// still can't fix the problem! If there is a RV already waiting the term.
+	// go func() { rf.term <- term }()
 
 	if args.Term > term {
 		Debug(dTerm, rf.me, "<- RV from S%v, newer term:%v", args.CandidateId, args.Term)
-		rf.becomeFollower(&args.Term, true)
+		rf.becomeFollower(term, &args.Term, true)
 	} else {
+		go func() { rf.term <- term }()
 		Debug(dTerm, rf.me, "<- RV from S%v, same term:%v", args.CandidateId, args.Term)
 		// if voted, then need to persist
 		if vote {
@@ -121,6 +123,8 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		go func() { rf.term <- term }()
 		return
 	}
+
+	go func() { rf.electionTimer <- void{} }()
 
 	if args.Term > term {
 		Debug(dTerm, rf.me, "<- AE from %v, newer term:%v", args.LeaderID, args.Term)
@@ -169,11 +173,8 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		Debug(dApply, rf.me, "AE fail, XTerm: %v, XIndex: %v, XLen: %v", reply.XTerm, reply.XIndex, reply.XLen)
 	}
 
-	go func() { rf.term <- term }()
-
 	// persist after log have been copied
-	rf.becomeFollower(&args.Term, len(args.Logs) > 0)
-	rf.electionTimer <- void{}
+	rf.becomeFollower(term, &args.Term, len(args.Logs) > 0)
 
 	commitIndex := <-rf.commitIndex
 	if reply.Success && args.CommitIndex > commitIndex {
@@ -198,6 +199,8 @@ func (rf *Raft) InstallSnapshot(args *SnapshotArgs, reply *SnapshotReply) {
 		return
 	}
 
+	go func() { rf.electionTimer <- void{} }()
+
 	if args.Term > term {
 		Debug(dTerm, rf.me, "<- Snapshot, newer term:%v", args.Term)
 	} else {
@@ -206,7 +209,6 @@ func (rf *Raft) InstallSnapshot(args *SnapshotArgs, reply *SnapshotReply) {
 
 	<-rf.voteFor
 	go func() { rf.voteFor <- args.LeaderID }()
-	rf.electionTimer <- void{}
 
 	<-rf.logCh
 	snapshotLastIndex := rf.snapshotLastIndex

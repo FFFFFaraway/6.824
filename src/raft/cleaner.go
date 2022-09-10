@@ -40,6 +40,9 @@ func (rf *Raft) cleaner() {
 			case c := <-rf.followerCtx:
 				Debug(dClean, rf.me, "rf.followerCtx %v", c)
 				ensureClosed(c)
+			case c := <-rf.tickerCtx:
+				Debug(dClean, rf.me, "rf.tickerCtx %v", c)
+				ensureClosed(c)
 			default:
 				return
 			}

@@ -72,12 +72,12 @@ func (rf *Raft) sendAllRV(done chan void) {
 		if ok {
 			// term when receiving reply
 			term := <-rf.term
-			go func() { rf.term <- term }()
 			if reply.Term > term {
 				Debug(dVote, rf.me, "RV reply, newer term:%v", reply.Term)
-				rf.becomeFollower(&reply.Term, true)
+				rf.becomeFollower(term, &reply.Term, true)
 				return
 			}
+			go func() { rf.term <- term }()
 			if reply.Vote {
 				Debug(dElection, rf.me, "RV reply Vote from <- %v", i)
 				cnt <- <-cnt + 1
@@ -115,7 +115,8 @@ func (rf *Raft) sendAllRV(done chan void) {
 		Debug(dElection, rf.me, "election success")
 		rf.becomeLeader()
 	case <-done:
+		term := <-rf.term
 		Debug(dElection, rf.me, "election fail, canceled")
-		rf.becomeFollower(nil, false)
+		rf.becomeFollower(term, nil, false)
 	}
 }
