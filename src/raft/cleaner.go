@@ -67,18 +67,6 @@ func (rf *Raft) cleaner() {
 			case rf.followerCtx <- closedCh:
 			case rf.tickerCtx <- closedCh:
 			case <-timeoutCh(WaitAllDie):
-				ensureClosed(rf.electionTimer)
-				ensureClosed(rf.term)
-				ensureClosed(rf.voteFor)
-				ensureClosed(rf.logCh)
-				ensureClosed(rf.commitIndex)
-				ensureClosed(rf.lastApplied)
-				ensureClosed(rf.matchIndexCh)
-				ensureClosed(rf.nextIndexCh)
-				ensureClosed(rf.leaderCtx)
-				ensureClosed(rf.candidateCtx)
-				ensureClosed(rf.followerCtx)
-				ensureClosed(rf.tickerCtx)
 				return
 			}
 		}
