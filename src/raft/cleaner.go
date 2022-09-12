@@ -1,11 +1,30 @@
 package raft
 
-func ensureClosed(ch chan void) {
-	if ch != nil {
-		select {
-		case <-ch:
-		default:
-			close(ch)
+func ensureClosed(i interface{}) {
+	switch ch := i.(type) {
+	case chan void:
+		if ch != nil {
+			select {
+			case <-ch:
+			default:
+				close(ch)
+			}
+		}
+	case chan int:
+		if ch != nil {
+			select {
+			case <-ch:
+			default:
+				close(ch)
+			}
+		}
+	case chan chan void:
+		if ch != nil {
+			select {
+			case <-ch:
+			default:
+				close(ch)
+			}
 		}
 	}
 }
@@ -13,37 +32,53 @@ func ensureClosed(ch chan void) {
 func (rf *Raft) cleaner() {
 	select {
 	case <-rf.dead:
+		Debug(dTerm, rf.me, "killed")
+		closedCh := make(chan void)
+		ensureClosed(closedCh)
 		for {
 			select {
 			case <-rf.electionTimer:
-				Debug(dClean, rf.me, "rf.electionTimer")
-			case t := <-rf.term:
-				Debug(dClean, rf.me, "rf.term %v", t)
-			case vf := <-rf.voteFor:
-				Debug(dClean, rf.me, "rf.voteFor %v", vf)
+			case <-rf.term:
+			case <-rf.voteFor:
 			case <-rf.logCh:
-				Debug(dClean, rf.me, "rf.logCh")
-			case c := <-rf.commitIndex:
-				Debug(dClean, rf.me, "rf.commitIndex %v", c)
-			case l := <-rf.lastApplied:
-				Debug(dClean, rf.me, "rf.lastApplied %v", l)
+			case <-rf.commitIndex:
+			case <-rf.lastApplied:
 			case <-rf.matchIndexCh:
-				Debug(dClean, rf.me, "rf.matchIndexCh")
 			case <-rf.nextIndexCh:
-				Debug(dClean, rf.me, "rf.nextIndexCh")
 			case c := <-rf.leaderCtx:
-				Debug(dClean, rf.me, "rf.leaderCtx %v", c)
 				ensureClosed(c)
 			case c := <-rf.candidateCtx:
-				Debug(dClean, rf.me, "rf.candidateCtx %v", c)
 				ensureClosed(c)
 			case c := <-rf.followerCtx:
-				Debug(dClean, rf.me, "rf.followerCtx %v", c)
 				ensureClosed(c)
 			case c := <-rf.tickerCtx:
-				Debug(dClean, rf.me, "rf.tickerCtx %v", c)
 				ensureClosed(c)
-			default:
+			// ##########################################################
+			case rf.electionTimer <- void{}:
+			case rf.term <- -1:
+			case rf.voteFor <- -1:
+			case rf.logCh <- void{}:
+			case rf.commitIndex <- -1:
+			case rf.lastApplied <- -1:
+			case rf.matchIndexCh <- void{}:
+			case rf.nextIndexCh <- void{}:
+			case rf.leaderCtx <- closedCh:
+			case rf.candidateCtx <- closedCh:
+			case rf.followerCtx <- closedCh:
+			case rf.tickerCtx <- closedCh:
+			case <-timeoutCh(WaitAllDie):
+				ensureClosed(rf.electionTimer)
+				ensureClosed(rf.term)
+				ensureClosed(rf.voteFor)
+				ensureClosed(rf.logCh)
+				ensureClosed(rf.commitIndex)
+				ensureClosed(rf.lastApplied)
+				ensureClosed(rf.matchIndexCh)
+				ensureClosed(rf.nextIndexCh)
+				ensureClosed(rf.leaderCtx)
+				ensureClosed(rf.candidateCtx)
+				ensureClosed(rf.followerCtx)
+				ensureClosed(rf.tickerCtx)
 				return
 			}
 		}

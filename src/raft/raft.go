@@ -46,6 +46,7 @@ const (
 	ApplierSleepTimeout        = 100 * time.Millisecond
 	ApplierSelectWait          = time.Millisecond
 	CommitIndexUpdateTimout    = 100 * time.Millisecond
+	WaitAllDie                 = 100 * time.Second
 )
 
 // Raft

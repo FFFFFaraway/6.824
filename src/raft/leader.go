@@ -1,5 +1,7 @@
 package raft
 
+import "time"
+
 // must acquire logCh and nextIndexCh before call it
 func (rf *Raft) prepare(done chan void, i, term, commitIndex int) *AEArgs {
 	// recompute the AEArgs
@@ -209,38 +211,46 @@ func (rf *Raft) HeartBeatLoop(done chan void) {
 
 func (rf *Raft) updateCommitIndex(done chan void) {
 	for {
+		time.Sleep(CommitIndexUpdateTimout)
+
+		term := <-rf.term
+		<-rf.logCh
+		commitIndex := <-rf.commitIndex
+		<-rf.matchIndexCh
+
+		// check killed after resource acquirement
 		select {
 		case <-done:
-			return
-		case <-timeoutCh(CommitIndexUpdateTimout):
-			term := <-rf.term
-			<-rf.logCh
-			commitIndex := <-rf.commitIndex
-			<-rf.matchIndexCh
-
-			Debug(dCommit, rf.me, "before update commitIndex, rf.matchIndex: %v", rf.matchIndex)
-
-			var max int
-			for max = len(rf.log) + rf.snapshotLastIndex; max >= commitIndex+1; max-- {
-				cnt := 0
-				for _, c := range rf.matchIndex {
-					if c >= max {
-						cnt++
-					}
-				}
-				if cnt >= len(rf.peers)/2 {
-					if max < rf.snapshotLastIndex+1 && rf.snapshotLastTerm == term {
-						break
-					} else if rf.log[max-1-rf.snapshotLastIndex].Term == term {
-						break
-					}
-				}
-			}
-			Debug(dCommit, rf.me, "update commitIndex %v -> %v", commitIndex, max)
 			go func() { rf.term <- term }()
 			go func() { rf.matchIndexCh <- void{} }()
 			go func() { rf.logCh <- void{} }()
-			go func() { rf.commitIndex <- max }()
+			go func() { rf.commitIndex <- commitIndex }()
+			return
+		default:
 		}
+
+		Debug(dCommit, rf.me, "before update commitIndex, rf.matchIndex: %v", rf.matchIndex)
+
+		var max int
+		for max = len(rf.log) + rf.snapshotLastIndex; max >= commitIndex+1; max-- {
+			cnt := 0
+			for _, c := range rf.matchIndex {
+				if c >= max {
+					cnt++
+				}
+			}
+			if cnt >= len(rf.peers)/2 {
+				if max < rf.snapshotLastIndex+1 && rf.snapshotLastTerm == term {
+					break
+				} else if rf.log[max-1-rf.snapshotLastIndex].Term == term {
+					break
+				}
+			}
+		}
+		Debug(dCommit, rf.me, "update commitIndex %v -> %v", commitIndex, max)
+		go func() { rf.term <- term }()
+		go func() { rf.matchIndexCh <- void{} }()
+		go func() { rf.logCh <- void{} }()
+		go func() { rf.commitIndex <- max }()
 	}
 }

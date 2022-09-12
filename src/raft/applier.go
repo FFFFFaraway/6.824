@@ -4,15 +4,19 @@ import "time"
 
 func (rf *Raft) applier() {
 	for {
+		<-rf.logCh
+		commitIndex := <-rf.commitIndex
+		lastApplied := <-rf.lastApplied
+
 		select {
 		case <-rf.dead:
+			go func() { rf.logCh <- void{} }()
+			go func() { rf.commitIndex <- commitIndex }()
+			go func() { rf.lastApplied <- lastApplied }()
 			return
 		default:
 		}
 
-		<-rf.logCh
-		commitIndex := <-rf.commitIndex
-		lastApplied := <-rf.lastApplied
 		cnt := 0
 
 		Debug(dDrop, rf.me, "before applying, len(log): %v, need to apply [%v, %v], snapshotLastIndex: %v", len(rf.log), lastApplied+1, commitIndex, rf.snapshotLastIndex)
