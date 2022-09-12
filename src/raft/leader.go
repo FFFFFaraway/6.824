@@ -240,8 +240,10 @@ func (rf *Raft) updateCommitIndex(done chan void) {
 				}
 			}
 			if cnt >= len(rf.peers)/2 {
-				if max < rf.snapshotLastIndex+1 && rf.snapshotLastTerm == term {
-					break
+				if max < rf.snapshotLastIndex+1 {
+					if rf.snapshotLastTerm == term {
+						break
+					}
 				} else if rf.log[max-1-rf.snapshotLastIndex].Term == term {
 					break
 				}
