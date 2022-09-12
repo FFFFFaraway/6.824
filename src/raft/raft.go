@@ -43,9 +43,9 @@ const (
 	HeartBeatTimeout           = 100 * time.Millisecond
 	ElectionTimeoutStart       = 300 * time.Millisecond
 	ElectionTimeoutRandomRange = 300 // time.Millisecond
-	ApplierSleepTimeout        = 100 * time.Millisecond
+	ApplierSleepTimeout        = 40 * time.Millisecond
 	ApplierSelectWait          = time.Millisecond
-	CommitIndexUpdateTimout    = 100 * time.Millisecond
+	CommitIndexUpdateTimout    = 40 * time.Millisecond
 	WaitAllDie                 = 100 * time.Second
 )
 
