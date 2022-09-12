@@ -93,6 +93,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		Debug(dVote, rf.me, "Grant Vote %v -> S%v", vf, args.CandidateId)
 		go func() { rf.voteFor <- args.CandidateId }()
 		reply.Vote = true
+		// must reset electionTimer under vote condition
+		go func() { rf.electionTimer <- void{} }()
 	}
 
 	// need to be close to the rf.becomeFollower
@@ -109,8 +111,6 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		Debug(dTerm, rf.me, "<- RV from S%v, same term:%v", args.CandidateId, args.Term)
 		// if voted, then need to persist
 		if vote {
-			// must reset electionTimer under vote condition
-			go func() { rf.electionTimer <- void{} }()
 			rf.persist(term, args.CandidateId)
 		}
 	}
