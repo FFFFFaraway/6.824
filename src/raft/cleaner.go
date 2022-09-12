@@ -1,5 +1,12 @@
 package raft
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
+
 func ensureClosed(i interface{}) {
 	switch ch := i.(type) {
 	case chan void:

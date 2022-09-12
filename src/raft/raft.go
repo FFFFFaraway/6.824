@@ -43,9 +43,9 @@ const (
 	HeartBeatTimeout           = 100 * time.Millisecond
 	ElectionTimeoutStart       = 300 * time.Millisecond
 	ElectionTimeoutRandomRange = 300 // time.Millisecond
-	ApplierSleepTimeout        = 40 * time.Millisecond
+	ApplierSleepTimeout        = 10 * time.Millisecond
 	ApplierSelectWait          = time.Millisecond
-	CommitIndexUpdateTimout    = 40 * time.Millisecond
+	CommitIndexUpdateTimout    = 10 * time.Millisecond
 	WaitAllDie                 = 100 * time.Second
 )
 
@@ -156,6 +156,10 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	vf := <-rf.voteFor
 	go func() { rf.voteFor <- vf }()
 	rf.persist(term, vf)
+
+	leaderCtx := <-rf.leaderCtx
+	go func() { rf.leaderCtx <- leaderCtx }()
+	go rf.sendAllHB(leaderCtx)
 
 	return index, term, isLeader
 }

@@ -138,12 +138,16 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	// Logs
 	<-rf.logCh
 	reply.XLen = len(rf.log) + rf.snapshotLastIndex
+	commitIndex := <-rf.commitIndex
+	go func() { rf.commitIndex <- commitIndex }()
 
 	if reply.XLen >= args.PrevLogIndex {
 		if args.PrevLogIndex <= rf.snapshotLastIndex {
 			// the prevLog is the snapshot, then copy the logs
 			if args.PrevLogTerm == rf.snapshotLastTerm {
-				rf.log = args.Logs
+				if len(args.Logs)+rf.snapshotLastIndex > commitIndex {
+					rf.log = args.Logs
+				}
 				reply.Success = true
 			} else {
 				Debug(dError, rf.me, "Snapshot Error, mismatch!")
@@ -151,7 +155,10 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 				reply.XIndex = 0
 			}
 		} else if rf.log[args.PrevLogIndex-1-rf.snapshotLastIndex].Term == args.PrevLogTerm {
-			rf.log = append(rf.log[:args.PrevLogIndex-rf.snapshotLastIndex], args.Logs...)
+			newLog := append(rf.log[:args.PrevLogIndex-rf.snapshotLastIndex], args.Logs...)
+			if len(newLog)+rf.snapshotLastIndex > commitIndex {
+				rf.log = newLog
+			}
 			reply.Success = true
 		} else {
 			reply.XTerm = rf.log[args.PrevLogIndex-1-rf.snapshotLastIndex].Term
@@ -167,6 +174,7 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		// the PrevLogIndex position has no log yet
 		reply.XTerm = -1
 	}
+	curLogLen := len(rf.log) + rf.snapshotLastIndex
 	go func() { rf.logCh <- void{} }()
 
 	if !reply.Success {
@@ -176,19 +184,15 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	// persist after log have been copied
 	rf.becomeFollower(term, &args.Term, len(args.Logs) > 0)
 
-	commitIndex := <-rf.commitIndex
+	commitIndex = <-rf.commitIndex
 	if reply.Success && args.CommitIndex > commitIndex {
 		Debug(dApply, rf.me, "<- AE, update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 		// must use the minimum
-		if reply.XLen < args.CommitIndex {
-			go func() { rf.commitIndex <- reply.XLen }()
-		} else {
-			go func() { rf.commitIndex <- args.CommitIndex }()
-		}
+		commitIndex = min(curLogLen, args.CommitIndex)
 	} else {
 		Debug(dDrop, rf.me, "<- AE, refuse update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
-		go func() { rf.commitIndex <- commitIndex }()
 	}
+	go func() { rf.commitIndex <- commitIndex }()
 }
 
 func (rf *Raft) InstallSnapshot(args *SnapshotArgs, reply *SnapshotReply) {
