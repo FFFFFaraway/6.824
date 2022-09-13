@@ -97,7 +97,7 @@ func (rf *Raft) sendAllHB(done chan void) {
 				<-rf.matchIndexCh
 				<-rf.nextIndexCh
 
-				rf.matchIndex[i] = len(oldLog) + oldStart
+				rf.matchIndex[i] = max(rf.matchIndex[i], len(oldLog)+oldStart)
 				rf.nextIndex[i] = len(rf.log) + 1 + rf.snapshotLastIndex
 
 				go func() { rf.logCh <- void{} }()

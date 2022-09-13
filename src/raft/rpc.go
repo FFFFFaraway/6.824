@@ -145,9 +145,35 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 		if args.PrevLogIndex <= rf.snapshotLastIndex {
 			// the prevLog is the snapshot, then copy the logs
 			if args.PrevLogTerm == rf.snapshotLastTerm {
-				if len(args.Logs)+rf.snapshotLastIndex > commitIndex {
-					rf.log = args.Logs
+				conflictPos := -1
+				// find remote log positions in local log, and compare them
+				// index to real index in args.Log: i-1-args.PrevLogIndex
+				// index to real index in rf.log: i-1-rf.snapshotLastIndex
+				for i := args.PrevLogIndex + 1; i <= args.PrevLogIndex+len(args.Logs); i++ {
+					if i <= rf.snapshotLastIndex {
+						if args.Logs[i-1-args.PrevLogIndex].Term != rf.snapshotLastTerm {
+							conflictPos = i
+							break
+						}
+						continue
+					}
+
+					if i-1-rf.snapshotLastIndex >= len(rf.log) {
+						conflictPos = i
+						break
+					}
+
+					if args.Logs[i-1-args.PrevLogIndex].Term != rf.log[i-1-rf.snapshotLastIndex].Term {
+						conflictPos = i
+						break
+					}
 				}
+
+				if conflictPos != -1 {
+					rf.log = append(rf.log[:conflictPos-1-rf.snapshotLastIndex],
+						args.Logs[conflictPos-1-args.PrevLogIndex:]...)
+				}
+
 				reply.Success = true
 			} else {
 				Debug(dError, rf.me, "Snapshot Error, mismatch!")
@@ -155,10 +181,25 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 				reply.XIndex = 0
 			}
 		} else if rf.log[args.PrevLogIndex-1-rf.snapshotLastIndex].Term == args.PrevLogTerm {
-			newLog := append(rf.log[:args.PrevLogIndex-rf.snapshotLastIndex], args.Logs...)
-			if len(newLog)+rf.snapshotLastIndex > commitIndex {
-				rf.log = newLog
+
+			conflictPos := -1
+			for i := args.PrevLogIndex + 1; i <= args.PrevLogIndex+len(args.Logs); i++ {
+				if i-1-rf.snapshotLastIndex >= len(rf.log) {
+					conflictPos = i
+					break
+				}
+
+				if args.Logs[i-1-args.PrevLogIndex].Term != rf.log[i-1-rf.snapshotLastIndex].Term {
+					conflictPos = i
+					break
+				}
 			}
+
+			if conflictPos != -1 {
+				rf.log = append(rf.log[:conflictPos-1-rf.snapshotLastIndex],
+					args.Logs[conflictPos-1-args.PrevLogIndex:]...)
+			}
+
 			reply.Success = true
 		} else {
 			reply.XTerm = rf.log[args.PrevLogIndex-1-rf.snapshotLastIndex].Term
@@ -217,8 +258,11 @@ func (rf *Raft) InstallSnapshot(args *SnapshotArgs, reply *SnapshotReply) {
 	<-rf.logCh
 	snapshotLastIndex := rf.snapshotLastIndex
 	go func() { rf.logCh <- void{} }()
+
+	commitIndex := <-rf.commitIndex
+	go func() { rf.commitIndex <- commitIndex }()
 	// although leader sends snapshot, but it's possible that follower's snapshot is newer
-	if args.SnapshotIndex > snapshotLastIndex {
+	if args.SnapshotIndex > snapshotLastIndex && args.SnapshotIndex >= commitIndex {
 		rf.applyCh <- ApplyMsg{
 			SnapshotValid: true,
 			Snapshot:      args.Snapshot,
