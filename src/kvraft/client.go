@@ -50,11 +50,12 @@ func (ck *Clerk) nextServer(server int) int {
 //
 func (ck *Clerk) Get(key string) string {
 	reply := &GetReply{}
+	rid := nrand()
 	for {
 		try := <-ck.leader
 		go func() { ck.leader <- try }()
 
-		ok := ck.servers[try].Call("KVServer.Get", &GetArgs{key}, reply)
+		ok := ck.servers[try].Call("KVServer.Get", &GetArgs{Key: key, RequestId: rid}, reply)
 		if ok {
 			switch reply.Err {
 			case OK:

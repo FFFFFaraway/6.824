@@ -51,7 +51,7 @@ fi
 
 rm test-*
 # Default to 100 runs unless otherwise specified
-runs=1
+runs=128
 if [ $# -gt 0 ]; then
 	runs="$1"
 fi
@@ -64,7 +64,7 @@ fi
 parallelism=128
 
 # Default to no test filtering unless otherwise specified
-test="OnePartition3A"
+test="3A"
 if [ $# -gt 2 ]; then
 	test="$3"
 fi

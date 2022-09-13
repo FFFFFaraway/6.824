@@ -5,12 +5,12 @@ import (
 	"6.824/labrpc"
 	"6.824/raft"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
 const (
-	PutOp = iota
+	GetOp = iota
+	PutOp
 	AppendOp
 )
 
@@ -32,12 +32,28 @@ type KVServer struct {
 
 	maxraftstate int // snapshot if log grows this big
 
-	data         sync.Map
+	data sync.Map
+	// map[spec index int]commit NotificationId in spec index, chan int64
 	notification sync.Map
 }
 
-func (kv *KVServer) applyCommand(c Command) {
+func (kv *KVServer) applyCommand(visited map[int64]void, msg raft.ApplyMsg) {
 	//Debug(dApply, kv.me, "Apply Command %+v", c)
+	index := msg.CommandIndex
+	c := msg.Command.(Command)
+
+	_, exist := visited[c.NotificationId]
+	if exist {
+		waitChInter, exist := kv.notification.Load(index)
+		if !exist {
+			waitChInter = make(chan int64)
+			kv.notification.Store(index, waitChInter)
+		}
+		go func() { waitChInter.(chan int64) <- c.NotificationId }()
+		return
+	}
+	visited[c.NotificationId] = void{}
+
 	switch c.Operator {
 	case PutOp:
 		kv.data.Store(c.Key, c.Value)
@@ -49,18 +65,21 @@ func (kv *KVServer) applyCommand(c Command) {
 			kv.data.Store(c.Key, c.Value)
 		}
 	}
-	waitCh, exist := kv.notification.Load(c.NotificationId)
-	if exist {
-		ensureClosed(waitCh)
+	waitChInter, exist := kv.notification.Load(index)
+	if !exist {
+		waitChInter = make(chan int64)
+		kv.notification.Store(index, waitChInter)
 	}
+	go func() { waitChInter.(chan int64) <- c.NotificationId }()
 }
 
 func (kv *KVServer) waiting() {
+	visited := make(map[int64]void)
 	for {
 		select {
-		case c := <-kv.applyCh:
-			if c.CommandValid {
-				kv.applyCommand(c.Command.(Command))
+		case msg := <-kv.applyCh:
+			if msg.CommandValid {
+				kv.applyCommand(visited, msg)
 			}
 		}
 	}
@@ -68,31 +87,65 @@ func (kv *KVServer) waiting() {
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	//Debug(dInfo, kv.me, "Get %+v", args)
-	defer Debug(dInfo, kv.me, "Get reply %+v", reply)
+	//defer Debug(dInfo, kv.me, "Get reply %+v", reply)
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
 		reply.Err = ErrWrongLeader
 		return
 	}
 
-	v, exist := kv.data.Load(args.Key)
-	if !exist {
-		reply.Err = ErrNoKey
+	specId := args.RequestId
+
+	index, _, isLeader := kv.rf.Start(Command{
+		Key:            args.Key,
+		Operator:       GetOp,
+		NotificationId: specId,
+	})
+	if !isLeader {
+		reply.Err = ErrWrongLeader
 		return
 	}
-	reply.Err = OK
-	reply.Value = v.(string)
+
+	waitChInter, exist := kv.notification.Load(index)
+	if !exist {
+		waitChInter = make(chan int64)
+		kv.notification.Store(index, waitChInter)
+	}
+	waitCh := waitChInter.(chan int64)
+
+	select {
+	case realId := <-waitCh:
+		go func() { waitCh <- realId }()
+
+		if realId != specId {
+			reply.Err = ErrWrongLeader
+			Debug(dInfo, kv.me, "Get canceled spec: %v, real: %v", specId, realId)
+			return
+		}
+		v, exist := kv.data.Load(args.Key)
+		if !exist {
+			reply.Err = ErrNoKey
+			return
+		}
+		reply.Err = OK
+		reply.Value = v.(string)
+		Debug(dInfo, kv.me, "Get ok %v", specId)
+		kv.notification.Delete(specId)
+	case <-timeoutCh(time.Second):
+		reply.Err = ErrWrongLeader
+		Debug(dInfo, kv.me, "Get timeout")
+	}
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	Debug(dInfo, kv.me, "PutAppend %+v", args)
-	defer Debug(dInfo, kv.me, "PutAppend reply %+v", reply)
+	//Debug(dInfo, kv.me, "PutAppend %+v", args)
+	//defer Debug(dInfo, kv.me, "PutAppend reply %+v", reply)
 	Operator := PutOp
 	if args.Op == "Put" {
 	} else if args.Op == "Append" {
 		Operator = AppendOp
 	} else {
-		Debug(dError, kv.me, "PutAppend unknown op: %v", args.Op)
+		Debug(dError, kv.me, "ERROR PutAppend unknown op: %v", args.Op)
 		return
 	}
 
@@ -102,55 +155,43 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 
-	nid := args.RequestId
-	ch, exist := kv.notification.Load(nid)
-	if exist {
-		<-ch.(chan void)
-		reply.Err = OK
-		return
-	}
+	specId := args.RequestId
 
-	waitCh := make(chan void)
-	kv.notification.Store(nid, waitCh)
-
-	kv.rf.Start(Command{
+	index, _, isLeader := kv.rf.Start(Command{
 		Key:            args.Key,
 		Value:          args.Value,
 		Operator:       Operator,
-		NotificationId: nid,
+		NotificationId: specId,
 	})
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
 
-	<-waitCh
-	reply.Err = OK
-	go kv.lazyDelete(nid)
+	waitChInter, exist := kv.notification.Load(index)
+	if !exist {
+		waitChInter = make(chan int64)
+		kv.notification.Store(index, waitChInter)
+	}
+	waitCh := waitChInter.(chan int64)
 
-	return
-}
+	select {
+	case realId := <-waitCh:
+		go func() { waitCh <- realId }()
 
-func (kv *KVServer) lazyDelete(nid int64) {
-	time.Sleep(time.Second)
-	kv.notification.Delete(nid)
-}
+		if realId != specId {
+			reply.Err = ErrWrongLeader
+			Debug(dInfo, kv.me, "PutAppend canceled spec:%v, real: %v", specId, realId)
+			return
+		}
 
-// Kill
-// the tester calls Kill() when a KVServer instance won't
-// be needed again. for your convenience, we supply
-// code to set rf.dead (without needing a lock),
-// and a killed() method to test rf.dead in
-// long-running loops. you can also add your own
-// code to Kill(). you're not required to do anything
-// about this, but it may be convenient (for example)
-// to suppress debug output from a Kill()ed instance.
-//
-func (kv *KVServer) Kill() {
-	atomic.StoreInt32(&kv.dead, 1)
-	kv.rf.Kill()
-	// Your code here, if desired.
-}
-
-func (kv *KVServer) killed() bool {
-	z := atomic.LoadInt32(&kv.dead)
-	return z == 1
+		reply.Err = OK
+		Debug(dInfo, kv.me, "PutAppend ok %v", specId)
+		kv.notification.Delete(specId)
+	case <-timeoutCh(time.Second):
+		reply.Err = ErrWrongLeader
+		Debug(dInfo, kv.me, "PutAppend timeout")
+	}
 }
 
 // StartKVServer
@@ -182,20 +223,13 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	//kv.term = make(chan int)
+	//kv.exit = make(chan chan void)
+	//term, _ := kv.rf.GetState()
+	//go func() { kv.term <- term }()
+	//go func() { kv.exit <- make(chan void) }()
+	//go kv.termChanged()
 	go kv.waiting()
 
 	return kv
-}
-
-func ensureClosed(i interface{}) {
-	switch ch := i.(type) {
-	case chan void:
-		if ch != nil {
-			select {
-			case <-ch:
-			default:
-				close(ch)
-			}
-		}
-	}
 }
