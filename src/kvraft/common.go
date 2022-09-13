@@ -8,11 +8,12 @@ const (
 
 type Err string
 
-// Put or Append
+// PutAppendArgs Put or Append
 type PutAppendArgs struct {
-	Key   string
-	Value string
-	Op    string // "Put" or "Append"
+	Key       string
+	Value     string
+	Op        string // "Put" or "Append"
+	RequestId int64
 	// You'll have to add definitions here.
 	// Field names must start with capital letters,
 	// otherwise RPC will break.

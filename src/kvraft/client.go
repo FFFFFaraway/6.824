@@ -1,13 +1,20 @@
 package kvraft
 
-import "6.824/labrpc"
+import (
+	"6.824/labrpc"
+	"time"
+)
 import "crypto/rand"
 import "math/big"
 
+const (
+	TryServerTimeout = 100 * time.Millisecond
+)
 
 type Clerk struct {
+	// read only
 	servers []*labrpc.ClientEnd
-	// You will have to modify this struct.
+	leader  chan int
 }
 
 func nrand() int64 {
@@ -20,11 +27,16 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	// You'll have to add code here.
+	ck.leader = make(chan int)
+	go func() { ck.leader <- 0 }()
 	return ck
 }
 
-//
+func (ck *Clerk) nextServer(server int) int {
+	return (server + 1) % len(ck.servers)
+}
+
+// Get
 // fetch the current value for a key.
 // returns "" if the key does not exist.
 // keeps trying forever in the face of all other errors.
@@ -37,12 +49,30 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) Get(key string) string {
+	reply := &GetReply{}
+	for {
+		try := <-ck.leader
+		go func() { ck.leader <- try }()
 
-	// You will have to modify this function.
-	return ""
+		ok := ck.servers[try].Call("KVServer.Get", &GetArgs{key}, reply)
+		if ok {
+			switch reply.Err {
+			case OK:
+				return reply.Value
+			case ErrNoKey:
+				return ""
+			case ErrWrongLeader:
+			}
+		}
+		// no others modify it
+		if try == <-ck.leader {
+			go func() { ck.leader <- ck.nextServer(try) }()
+		}
+		time.Sleep(TryServerTimeout)
+	}
 }
 
-//
+// PutAppend
 // shared by Put and Append.
 //
 // you can send an RPC with code like this:
@@ -53,7 +83,32 @@ func (ck *Clerk) Get(key string) string {
 // arguments. and reply must be passed as a pointer.
 //
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	// You will have to modify this function.
+	reply := PutAppendReply{}
+	rid := nrand()
+	for {
+		try := <-ck.leader
+		go func() { ck.leader <- try }()
+
+		ok := ck.servers[try].Call("KVServer.PutAppend", &PutAppendArgs{
+			Key:       key,
+			Value:     value,
+			Op:        op,
+			RequestId: rid,
+		}, &reply)
+
+		if ok {
+			switch reply.Err {
+			case OK:
+				return
+			case ErrWrongLeader:
+			}
+		}
+		// no others modify it
+		if try == <-ck.leader {
+			go func() { ck.leader <- ck.nextServer(try) }()
+		}
+		time.Sleep(TryServerTimeout)
+	}
 }
 
 func (ck *Clerk) Put(key string, value string) {

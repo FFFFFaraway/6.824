@@ -4,29 +4,27 @@ import (
 	"6.824/labgob"
 	"6.824/labrpc"
 	"6.824/raft"
-	"log"
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
-const Debug = false
+const (
+	PutOp = iota
+	AppendOp
+)
 
-func DPrintf(format string, a ...interface{}) (n int, err error) {
-	if Debug {
-		log.Printf(format, a...)
-	}
-	return
+type Command struct {
+	Key            string
+	Value          string
+	Operator       int
+	NotificationId int64
 }
 
-
-type Op struct {
-	// Your definitions here.
-	// Field names must start with capital letters,
-	// otherwise RPC will break.
-}
+type void struct{}
 
 type KVServer struct {
-	mu      sync.Mutex
+	//mu      sync.Mutex
 	me      int
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
@@ -34,19 +32,107 @@ type KVServer struct {
 
 	maxraftstate int // snapshot if log grows this big
 
-	// Your definitions here.
+	data         sync.Map
+	notification sync.Map
 }
 
+func (kv *KVServer) applyCommand(c Command) {
+	//Debug(dApply, kv.me, "Apply Command %+v", c)
+	switch c.Operator {
+	case PutOp:
+		kv.data.Store(c.Key, c.Value)
+	case AppendOp:
+		v, exist := kv.data.Load(c.Key)
+		if exist {
+			kv.data.Store(c.Key, v.(string)+c.Value)
+		} else {
+			kv.data.Store(c.Key, c.Value)
+		}
+	}
+	waitCh, exist := kv.notification.Load(c.NotificationId)
+	if exist {
+		ensureClosed(waitCh)
+	}
+}
+
+func (kv *KVServer) waiting() {
+	for {
+		select {
+		case c := <-kv.applyCh:
+			if c.CommandValid {
+				kv.applyCommand(c.Command.(Command))
+			}
+		}
+	}
+}
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	// Your code here.
+	//Debug(dInfo, kv.me, "Get %+v", args)
+	defer Debug(dInfo, kv.me, "Get reply %+v", reply)
+	_, isLeader := kv.rf.GetState()
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	v, exist := kv.data.Load(args.Key)
+	if !exist {
+		reply.Err = ErrNoKey
+		return
+	}
+	reply.Err = OK
+	reply.Value = v.(string)
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	// Your code here.
+	Debug(dInfo, kv.me, "PutAppend %+v", args)
+	defer Debug(dInfo, kv.me, "PutAppend reply %+v", reply)
+	Operator := PutOp
+	if args.Op == "Put" {
+	} else if args.Op == "Append" {
+		Operator = AppendOp
+	} else {
+		Debug(dError, kv.me, "PutAppend unknown op: %v", args.Op)
+		return
+	}
+
+	_, isLeader := kv.rf.GetState()
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	nid := args.RequestId
+	ch, exist := kv.notification.Load(nid)
+	if exist {
+		<-ch.(chan void)
+		reply.Err = OK
+		return
+	}
+
+	waitCh := make(chan void)
+	kv.notification.Store(nid, waitCh)
+
+	kv.rf.Start(Command{
+		Key:            args.Key,
+		Value:          args.Value,
+		Operator:       Operator,
+		NotificationId: nid,
+	})
+
+	<-waitCh
+	reply.Err = OK
+	go kv.lazyDelete(nid)
+
+	return
 }
 
-//
+func (kv *KVServer) lazyDelete(nid int64) {
+	time.Sleep(time.Second)
+	kv.notification.Delete(nid)
+}
+
+// Kill
 // the tester calls Kill() when a KVServer instance won't
 // be needed again. for your convenience, we supply
 // code to set rf.dead (without needing a lock),
@@ -67,7 +153,7 @@ func (kv *KVServer) killed() bool {
 	return z == 1
 }
 
-//
+// StartKVServer
 // servers[] contains the ports of the set of
 // servers that will cooperate via Raft to
 // form the fault-tolerant key/value service.
@@ -84,7 +170,7 @@ func (kv *KVServer) killed() bool {
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
-	labgob.Register(Op{})
+	labgob.Register(Command{})
 
 	kv := new(KVServer)
 	kv.me = me
@@ -96,6 +182,20 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 
 	// You may need initialization code here.
+	go kv.waiting()
 
 	return kv
+}
+
+func ensureClosed(i interface{}) {
+	switch ch := i.(type) {
+	case chan void:
+		if ch != nil {
+			select {
+			case <-ch:
+			default:
+				close(ch)
+			}
+		}
+	}
 }
