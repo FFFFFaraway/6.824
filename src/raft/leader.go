@@ -67,6 +67,7 @@ func (rf *Raft) sendAllHB(done chan void) {
 	oldLog := rf.log
 	for i := range rf.peers {
 		if i != rf.me {
+			rf.nextIndex[i] = min(rf.nextIndex[i], len(rf.log)+1+rf.snapshotLastIndex)
 			preparation[i] = rf.prepare(done, i, oldTerm, oldCommitIndex)
 		}
 	}
