@@ -342,7 +342,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	if lastIncludedIndex <= rf.snapshotLastIndex {
 		Debug(dSnap, rf.me, "CondInstallSnapshot discard %v, still use %v", lastIncludedIndex, rf.snapshotLastIndex)
 		go func() { rf.logCh <- void{} }()
-		return true
+		return false
 	}
 	rf.snapshotLastTerm = lastIncludedTerm
 	rf.snapshotLastIndex = lastIncludedIndex

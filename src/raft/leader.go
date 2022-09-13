@@ -126,7 +126,7 @@ func (rf *Raft) sendAllHB(done chan void) {
 						rf.nextIndex[i] = reply.XIndex + 1
 					}
 				}
-
+				rf.nextIndex[i] = min(rf.nextIndex[i], len(rf.log)+1+rf.snapshotLastIndex)
 				// use the rf.nextIndex to recompute the AEArgs
 				preparation[i] = rf.prepare(done, i, term, commitIndex)
 
