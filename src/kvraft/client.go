@@ -15,6 +15,7 @@ type Clerk struct {
 	// read only
 	servers []*labrpc.ClientEnd
 	leader  chan int
+	lastSuc chan int64
 }
 
 func nrand() int64 {
@@ -28,7 +29,9 @@ func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
 	ck.leader = make(chan int)
+	ck.lastSuc = make(chan int64)
 	go func() { ck.leader <- 0 }()
+	go func() { ck.lastSuc <- 0 }()
 	return ck
 }
 
@@ -51,14 +54,18 @@ func (ck *Clerk) nextServer(server int) int {
 func (ck *Clerk) Get(key string) string {
 	reply := &GetReply{}
 	rid := nrand()
+	lastSuc := <-ck.lastSuc
+	go func() { ck.lastSuc <- lastSuc }()
 	for {
 		try := <-ck.leader
 		go func() { ck.leader <- try }()
 
-		ok := ck.servers[try].Call("KVServer.Get", &GetArgs{Key: key, RequestId: rid}, reply)
+		ok := ck.servers[try].Call("KVServer.Get", &GetArgs{Key: key, RequestId: rid, LastSuc: lastSuc}, reply)
 		if ok {
 			switch reply.Err {
 			case OK:
+				<-ck.lastSuc
+				go func() { ck.lastSuc <- rid }()
 				return reply.Value
 			case ErrNoKey:
 				return ""
@@ -86,6 +93,8 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutAppend(key string, value string, op string) {
 	reply := PutAppendReply{}
 	rid := nrand()
+	lastSuc := <-ck.lastSuc
+	go func() { ck.lastSuc <- lastSuc }()
 	for {
 		try := <-ck.leader
 		go func() { ck.leader <- try }()
@@ -95,11 +104,14 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 			Value:     value,
 			Op:        op,
 			RequestId: rid,
+			LastSuc:   lastSuc,
 		}, &reply)
 
 		if ok {
 			switch reply.Err {
 			case OK:
+				<-ck.lastSuc
+				go func() { ck.lastSuc <- rid }()
 				return
 			case ErrWrongLeader:
 			}

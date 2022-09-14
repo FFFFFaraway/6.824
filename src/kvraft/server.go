@@ -23,6 +23,7 @@ type Command struct {
 	Value          string
 	Operator       int
 	NotificationId int64
+	LastSuc        int64
 }
 
 type void struct{}
@@ -39,9 +40,10 @@ type KVServer struct {
 	data sync.Map
 	// map[spec index int]commit NotificationId in spec index, chan int64
 	notification sync.Map
+	appliedMap   map[int64]void
 }
 
-func (kv *KVServer) applyCommand(visited map[int64]void, msg raft.ApplyMsg) {
+func (kv *KVServer) applyCommand(msg raft.ApplyMsg) {
 	//Debug(dApply, kv.me, "Apply Command %+v", c)
 	index := msg.CommandIndex
 	c := msg.Command.(Command)
@@ -53,11 +55,12 @@ func (kv *KVServer) applyCommand(visited map[int64]void, msg raft.ApplyMsg) {
 	}
 	go func() { waitChInter.(chan int64) <- c.NotificationId }()
 
-	_, exist = visited[c.NotificationId]
+	delete(kv.appliedMap, c.LastSuc)
+	_, exist = kv.appliedMap[c.NotificationId]
 	if exist {
 		return
 	}
-	visited[c.NotificationId] = void{}
+	kv.appliedMap[c.NotificationId] = void{}
 
 	switch c.Operator {
 	case PutOp:
@@ -73,14 +76,13 @@ func (kv *KVServer) applyCommand(visited map[int64]void, msg raft.ApplyMsg) {
 }
 
 func (kv *KVServer) waiting() {
-	visited := make(map[int64]void)
 	for {
 		select {
 		case <-kv.dead:
 			return
 		case msg := <-kv.applyCh:
 			if msg.CommandValid {
-				kv.applyCommand(visited, msg)
+				kv.applyCommand(msg)
 			}
 		}
 	}
@@ -94,6 +96,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		Key:            args.Key,
 		Operator:       GetOp,
 		NotificationId: specId,
+		LastSuc:        args.LastSuc,
 	})
 	if !isLeader {
 		reply.Err = ErrWrongLeader
@@ -126,8 +129,10 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 		reply.Err = OK
 		reply.Value = v.(string)
+		//Debug(dInfo, kv.me, "Get ok %v, delete %v", specId, args.LastSuc)
 		Debug(dInfo, kv.me, "Get ok %v", specId)
 		kv.notification.Delete(specId)
+
 	case <-timeoutCh(waitTimeout):
 		reply.Err = ErrWrongLeader
 		Debug(dInfo, kv.me, "Get timeout")
@@ -152,6 +157,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		Value:          args.Value,
 		Operator:       Operator,
 		NotificationId: specId,
+		LastSuc:        args.LastSuc,
 	})
 	if !isLeader {
 		reply.Err = ErrWrongLeader
@@ -179,11 +185,31 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		}
 
 		reply.Err = OK
+		//Debug(dInfo, kv.me, "PutAppend ok %v, delete %v", specId, args.LastSuc)
 		Debug(dInfo, kv.me, "PutAppend ok %v", specId)
 		kv.notification.Delete(specId)
+
 	case <-timeoutCh(waitTimeout):
 		reply.Err = ErrWrongLeader
 		Debug(dInfo, kv.me, "PutAppend timeout")
+	}
+}
+
+func (kv *KVServer) cleaner() {
+	select {
+	case <-kv.dead:
+		kv.notification.Range(func(key, value interface{}) bool {
+			for {
+				select {
+				case id := <-value.(chan int64):
+					Debug(dInfo, kv.me, "delete index %v with request id %v", key, id)
+				case value.(chan int64) <- 0:
+					Debug(dInfo, kv.me, "delete index %v", key)
+				default:
+					return true
+				}
+			}
+		})
 	}
 }
 
@@ -211,12 +237,13 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
-
+	kv.appliedMap = make(map[int64]void)
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	kv.dead = make(chan void)
 
 	go kv.waiting()
+	go kv.cleaner()
 
 	return kv
 }
