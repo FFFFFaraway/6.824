@@ -54,7 +54,7 @@ func (kv *KVServer) applyCommand(msg raft.ApplyMsg) {
 	waitChInter, exist := kv.notification.Load(index)
 	// if this server exist waiting request
 	if exist {
-		waitChInter.(chan int64) <- c.NotificationId
+		go func() { waitChInter.(chan int64) <- c.NotificationId }()
 	}
 
 	// lastSuc received by client, delete it
@@ -109,7 +109,6 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 
 	waitCh := make(chan int64)
 	kv.notification.Store(index, waitCh)
-	defer func() { kv.notification.Delete(index) }()
 
 	select {
 	case <-kv.dead:
@@ -162,7 +161,6 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 
 	waitCh := make(chan int64)
 	kv.notification.Store(index, waitCh)
-	defer func() { kv.notification.Delete(index) }()
 
 	select {
 	case <-kv.dead:
@@ -179,6 +177,24 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	case <-timeoutCh(waitTimeout):
 		reply.Err = ErrWrongLeader
 		Debug(dInfo, kv.me, "PutAppend timeout")
+	}
+}
+
+func (kv *KVServer) cleaner() {
+	select {
+	case <-kv.dead:
+		kv.notification.Range(func(key, value interface{}) bool {
+			for {
+				select {
+				case id := <-value.(chan int64):
+					Debug(dInfo, kv.me, "delete index %v with request id %v", key, id)
+				case value.(chan int64) <- 0:
+					Debug(dInfo, kv.me, "delete index %v", key)
+				default:
+					return true
+				}
+			}
+		})
 	}
 }
 
@@ -212,6 +228,7 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.dead = make(chan void)
 
 	go kv.waiting()
+	go kv.cleaner()
 
 	return kv
 }
