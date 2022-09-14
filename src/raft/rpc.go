@@ -138,8 +138,6 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	// Logs
 	<-rf.logCh
 	reply.XLen = len(rf.log) + rf.snapshotLastIndex
-	commitIndex := <-rf.commitIndex
-	go func() { rf.commitIndex <- commitIndex }()
 
 	if reply.XLen >= args.PrevLogIndex {
 		if args.PrevLogIndex <= rf.snapshotLastIndex {
@@ -225,7 +223,7 @@ func (rf *Raft) AE(args *AEArgs, reply *AEReply) {
 	// persist after log have been copied
 	rf.becomeFollower(term, &args.Term, len(args.Logs) > 0)
 
-	commitIndex = <-rf.commitIndex
+	commitIndex := <-rf.commitIndex
 	if reply.Success && args.CommitIndex > commitIndex {
 		Debug(dApply, rf.me, "<- AE, update commitIndex: %v -> %v", commitIndex, args.CommitIndex)
 		// must use the minimum
