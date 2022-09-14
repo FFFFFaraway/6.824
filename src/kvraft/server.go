@@ -14,6 +14,10 @@ const (
 	AppendOp
 )
 
+const (
+	waitTimeout = 100 * time.Millisecond
+)
+
 type Command struct {
 	Key            string
 	Value          string
@@ -28,7 +32,7 @@ type KVServer struct {
 	me      int
 	rf      *raft.Raft
 	applyCh chan raft.ApplyMsg
-	dead    int32 // set by Kill()
+	dead    chan void // set by Kill()
 
 	maxraftstate int // snapshot if log grows this big
 
@@ -42,14 +46,15 @@ func (kv *KVServer) applyCommand(visited map[int64]void, msg raft.ApplyMsg) {
 	index := msg.CommandIndex
 	c := msg.Command.(Command)
 
-	_, exist := visited[c.NotificationId]
+	waitChInter, exist := kv.notification.Load(index)
+	if !exist {
+		waitChInter = make(chan int64)
+		kv.notification.Store(index, waitChInter)
+	}
+	go func() { waitChInter.(chan int64) <- c.NotificationId }()
+
+	_, exist = visited[c.NotificationId]
 	if exist {
-		waitChInter, exist := kv.notification.Load(index)
-		if !exist {
-			waitChInter = make(chan int64)
-			kv.notification.Store(index, waitChInter)
-		}
-		go func() { waitChInter.(chan int64) <- c.NotificationId }()
 		return
 	}
 	visited[c.NotificationId] = void{}
@@ -65,18 +70,14 @@ func (kv *KVServer) applyCommand(visited map[int64]void, msg raft.ApplyMsg) {
 			kv.data.Store(c.Key, c.Value)
 		}
 	}
-	waitChInter, exist := kv.notification.Load(index)
-	if !exist {
-		waitChInter = make(chan int64)
-		kv.notification.Store(index, waitChInter)
-	}
-	go func() { waitChInter.(chan int64) <- c.NotificationId }()
 }
 
 func (kv *KVServer) waiting() {
 	visited := make(map[int64]void)
 	for {
 		select {
+		case <-kv.dead:
+			return
 		case msg := <-kv.applyCh:
 			if msg.CommandValid {
 				kv.applyCommand(visited, msg)
@@ -88,14 +89,7 @@ func (kv *KVServer) waiting() {
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	//Debug(dInfo, kv.me, "Get %+v", args)
 	//defer Debug(dInfo, kv.me, "Get reply %+v", reply)
-	_, isLeader := kv.rf.GetState()
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
 	specId := args.RequestId
-
 	index, _, isLeader := kv.rf.Start(Command{
 		Key:            args.Key,
 		Operator:       GetOp,
@@ -114,6 +108,9 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 	waitCh := waitChInter.(chan int64)
 
 	select {
+	case <-kv.dead:
+		reply.Err = ErrWrongLeader
+		Debug(dInfo, kv.me, "Killed")
 	case realId := <-waitCh:
 		go func() { waitCh <- realId }()
 
@@ -131,7 +128,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		reply.Value = v.(string)
 		Debug(dInfo, kv.me, "Get ok %v", specId)
 		kv.notification.Delete(specId)
-	case <-timeoutCh(time.Second):
+	case <-timeoutCh(waitTimeout):
 		reply.Err = ErrWrongLeader
 		Debug(dInfo, kv.me, "Get timeout")
 	}
@@ -149,14 +146,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 
-	_, isLeader := kv.rf.GetState()
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
 	specId := args.RequestId
-
 	index, _, isLeader := kv.rf.Start(Command{
 		Key:            args.Key,
 		Value:          args.Value,
@@ -176,6 +166,9 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	waitCh := waitChInter.(chan int64)
 
 	select {
+	case <-kv.dead:
+		reply.Err = ErrWrongLeader
+		Debug(dInfo, kv.me, "Killed")
 	case realId := <-waitCh:
 		go func() { waitCh <- realId }()
 
@@ -188,7 +181,7 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		reply.Err = OK
 		Debug(dInfo, kv.me, "PutAppend ok %v", specId)
 		kv.notification.Delete(specId)
-	case <-timeoutCh(time.Second):
+	case <-timeoutCh(waitTimeout):
 		reply.Err = ErrWrongLeader
 		Debug(dInfo, kv.me, "PutAppend timeout")
 	}
@@ -221,14 +214,8 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
+	kv.dead = make(chan void)
 
-	// You may need initialization code here.
-	//kv.term = make(chan int)
-	//kv.exit = make(chan chan void)
-	//term, _ := kv.rf.GetState()
-	//go func() { kv.term <- term }()
-	//go func() { kv.exit <- make(chan void) }()
-	//go kv.termChanged()
 	go kv.waiting()
 
 	return kv

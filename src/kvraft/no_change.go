@@ -1,7 +1,6 @@
 package kvraft
 
 import (
-	"sync/atomic"
 	"time"
 )
 
@@ -16,14 +15,8 @@ import (
 // to suppress debug output from a Kill()ed instance.
 //
 func (kv *KVServer) Kill() {
-	atomic.StoreInt32(&kv.dead, 1)
+	ensureClosed(kv.dead)
 	kv.rf.Kill()
-	// Your code here, if desired.
-}
-
-func (kv *KVServer) killed() bool {
-	z := atomic.LoadInt32(&kv.dead)
-	return z == 1
 }
 
 func ensureClosed(i interface{}) {
