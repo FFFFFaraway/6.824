@@ -38,9 +38,12 @@ type KVServer struct {
 	maxraftstate int // snapshot if log grows this big
 
 	data sync.Map
-	// map[spec index int]commit NotificationId in spec index, chan int64
+	// each index allocate a channel to inform the waiting request
+	// map[specIndex int]committed NotificationId in spec index, chan int64
 	notification sync.Map
-	appliedMap   map[int64]void
+	// for duplicate apply detection: applied to state machine but haven't received by client yet
+	// map[requestId int64]void
+	appliedButNotReceived map[int64]void
 }
 
 func (kv *KVServer) applyCommand(msg raft.ApplyMsg) {
@@ -49,18 +52,19 @@ func (kv *KVServer) applyCommand(msg raft.ApplyMsg) {
 	c := msg.Command.(Command)
 
 	waitChInter, exist := kv.notification.Load(index)
-	if !exist {
-		waitChInter = make(chan int64)
-		kv.notification.Store(index, waitChInter)
-	}
-	go func() { waitChInter.(chan int64) <- c.NotificationId }()
-
-	delete(kv.appliedMap, c.LastSuc)
-	_, exist = kv.appliedMap[c.NotificationId]
+	// if this server exist waiting request
 	if exist {
+		waitChInter.(chan int64) <- c.NotificationId
+	}
+
+	// lastSuc received by client, delete it
+	delete(kv.appliedButNotReceived, c.LastSuc)
+	_, exist = kv.appliedButNotReceived[c.NotificationId]
+	if exist {
+		// have applied before, then don't apply it again
 		return
 	}
-	kv.appliedMap[c.NotificationId] = void{}
+	kv.appliedButNotReceived[c.NotificationId] = void{}
 
 	switch c.Operator {
 	case PutOp:
@@ -103,20 +107,15 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		return
 	}
 
-	waitChInter, exist := kv.notification.Load(index)
-	if !exist {
-		waitChInter = make(chan int64)
-		kv.notification.Store(index, waitChInter)
-	}
-	waitCh := waitChInter.(chan int64)
+	waitCh := make(chan int64)
+	kv.notification.Store(index, waitCh)
+	defer func() { kv.notification.Delete(index) }()
 
 	select {
 	case <-kv.dead:
 		reply.Err = ErrWrongLeader
 		Debug(dInfo, kv.me, "Killed")
 	case realId := <-waitCh:
-		go func() { waitCh <- realId }()
-
 		if realId != specId {
 			reply.Err = ErrWrongLeader
 			Debug(dInfo, kv.me, "Get canceled spec: %v, real: %v", specId, realId)
@@ -129,10 +128,7 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 		reply.Err = OK
 		reply.Value = v.(string)
-		//Debug(dInfo, kv.me, "Get ok %v, delete %v", specId, args.LastSuc)
 		Debug(dInfo, kv.me, "Get ok %v", specId)
-		kv.notification.Delete(specId)
-
 	case <-timeoutCh(waitTimeout):
 		reply.Err = ErrWrongLeader
 		Debug(dInfo, kv.me, "Get timeout")
@@ -164,52 +160,25 @@ func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 
-	waitChInter, exist := kv.notification.Load(index)
-	if !exist {
-		waitChInter = make(chan int64)
-		kv.notification.Store(index, waitChInter)
-	}
-	waitCh := waitChInter.(chan int64)
+	waitCh := make(chan int64)
+	kv.notification.Store(index, waitCh)
+	defer func() { kv.notification.Delete(index) }()
 
 	select {
 	case <-kv.dead:
 		reply.Err = ErrWrongLeader
 		Debug(dInfo, kv.me, "Killed")
 	case realId := <-waitCh:
-		go func() { waitCh <- realId }()
-
 		if realId != specId {
 			reply.Err = ErrWrongLeader
 			Debug(dInfo, kv.me, "PutAppend canceled spec:%v, real: %v", specId, realId)
 			return
 		}
-
 		reply.Err = OK
-		//Debug(dInfo, kv.me, "PutAppend ok %v, delete %v", specId, args.LastSuc)
 		Debug(dInfo, kv.me, "PutAppend ok %v", specId)
-		kv.notification.Delete(specId)
-
 	case <-timeoutCh(waitTimeout):
 		reply.Err = ErrWrongLeader
 		Debug(dInfo, kv.me, "PutAppend timeout")
-	}
-}
-
-func (kv *KVServer) cleaner() {
-	select {
-	case <-kv.dead:
-		kv.notification.Range(func(key, value interface{}) bool {
-			for {
-				select {
-				case id := <-value.(chan int64):
-					Debug(dInfo, kv.me, "delete index %v with request id %v", key, id)
-				case value.(chan int64) <- 0:
-					Debug(dInfo, kv.me, "delete index %v", key)
-				default:
-					return true
-				}
-			}
-		})
 	}
 }
 
@@ -237,13 +206,12 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
-	kv.appliedMap = make(map[int64]void)
+	kv.appliedButNotReceived = make(map[int64]void)
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	kv.dead = make(chan void)
 
 	go kv.waiting()
-	go kv.cleaner()
 
 	return kv
 }
