@@ -39,7 +39,8 @@ func (rf *Raft) prepare(done chan void, i, term, commitIndex int) *AEArgs {
 		startIndex = start + 1
 		prevLogTerm = rf.snapshotLastTerm
 	}
-	sendLogs := rf.log[startIndex-1-start:]
+	sendLogs := make([]*Entry, len(rf.log[startIndex-1-start:]))
+	copy(sendLogs, rf.log[startIndex-1-start:])
 	return &AEArgs{
 		Term:         term,
 		Logs:         sendLogs,
