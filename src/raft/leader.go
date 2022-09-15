@@ -180,7 +180,7 @@ func (rf *Raft) becomeLeader() {
 
 	<-rf.matchIndexCh
 	for i := range rf.matchIndex {
-		rf.matchIndex[i] = 0
+		rf.matchIndex[i] = rf.snapshotLastIndex
 	}
 	go func() { rf.matchIndexCh <- void{} }()
 

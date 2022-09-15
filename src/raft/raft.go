@@ -337,8 +337,9 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // So lastIncludedTerm and lastIncludedIndex is needed.
 // It is called when service reply the snapshot applyCh.
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
-	Debug(dSnap, rf.me, "CondInstallSnapshot before index: %v", lastIncludedIndex)
+	Debug(dServer, rf.me, "CondInstallSnapshot before index: %v", lastIncludedIndex)
 	<-rf.logCh
+	oldStart := rf.snapshotLastIndex
 	if lastIncludedIndex <= rf.snapshotLastIndex {
 		Debug(dSnap, rf.me, "CondInstallSnapshot discard %v, still use %v", lastIncludedIndex, rf.snapshotLastIndex)
 		go func() { rf.logCh <- void{} }()
@@ -348,7 +349,9 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	rf.snapshotLastIndex = lastIncludedIndex
 	rf.snapshot = snapshot
 	// reset log
-	rf.log = make([]*Entry, 0)
+	if lastIncludedIndex+1-1-oldStart < len(rf.log) {
+		rf.log = rf.log[lastIncludedIndex+1-1-oldStart:]
+	}
 
 	lastApplied := <-rf.lastApplied
 	Debug(dSnap, rf.me, "CondInstallSnapshot lastApplied %v -> %v", lastApplied, lastIncludedIndex)
@@ -376,9 +379,9 @@ func (rf *Raft) persistSnapshot(snapshot []byte) {
 	voteFor := <-rf.voteFor
 	<-rf.logCh
 
+	e.Encode(rf.log)
 	e.Encode(term)
 	e.Encode(voteFor)
-	e.Encode(rf.log)
 	e.Encode(rf.snapshotLastIndex)
 	e.Encode(rf.snapshotLastTerm)
 
