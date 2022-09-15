@@ -31,6 +31,7 @@ const (
 	dElection logTopic = "ELEC"
 	dClean    logTopic = "CLEA"
 	dApply    logTopic = "APLY"
+	dServer   logTopic = "SEVE"
 )
 
 // Retrieve the verbosity level from an environment variable
@@ -58,7 +59,7 @@ func init() {
 }
 
 func Debug(topic logTopic, who int, format string, a ...interface{}) {
-	if topic == dDrop || topic == dClean {
+	if topic == dDrop || topic == dClean || topic != dServer {
 		return
 	}
 	if debugVerbosity >= 1 {
