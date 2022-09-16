@@ -327,8 +327,16 @@ func (rf *Raft) readPersist(data []byte) {
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	Debug(dSnap, rf.me, "Snapshot before index: %v", index)
+	term := <-rf.term
+	voteFor := <-rf.voteFor
 	<-rf.logCh
 	oldStart := rf.snapshotLastIndex
+	if index <= oldStart {
+		go func() { rf.term <- term }()
+		go func() { rf.voteFor <- voteFor }()
+		go func() { rf.logCh <- void{} }()
+		return
+	}
 	lastEntry := rf.log[index-1-oldStart]
 	lastTerm := lastEntry.Term
 
@@ -337,8 +345,12 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	rf.snapshotLastIndex = index
 	rf.snapshotLastTerm = lastTerm
 	rf.snapshot = snapshot
+
+	rf.persistSnapshot(term, voteFor, snapshot)
+
+	go func() { rf.term <- term }()
+	go func() { rf.voteFor <- voteFor }()
 	go func() { rf.logCh <- void{} }()
-	rf.persistSnapshot(snapshot)
 }
 
 // CondInstallSnapshot
@@ -350,10 +362,14 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 // It is called when service reply the snapshot applyCh.
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 	Debug(dServer, rf.me, "CondInstallSnapshot before index: %v", lastIncludedIndex)
+	term := <-rf.term
+	voteFor := <-rf.voteFor
 	<-rf.logCh
 	oldStart := rf.snapshotLastIndex
 	if lastIncludedIndex <= rf.snapshotLastIndex {
 		Debug(dSnap, rf.me, "CondInstallSnapshot discard %v, still use %v", lastIncludedIndex, rf.snapshotLastIndex)
+		go func() { rf.term <- term }()
+		go func() { rf.voteFor <- voteFor }()
 		go func() { rf.logCh <- void{} }()
 		return false
 	}
@@ -370,9 +386,13 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	lastApplied := <-rf.lastApplied
 	Debug(dSnap, rf.me, "CondInstallSnapshot lastApplied %v -> %v", lastApplied, lastIncludedIndex)
 
+	rf.persistSnapshot(term, voteFor, snapshot)
+
+	go func() { rf.term <- term }()
+	go func() { rf.voteFor <- voteFor }()
 	go func() { rf.logCh <- void{} }()
 	go func() { rf.lastApplied <- lastIncludedIndex }()
-	rf.persistSnapshot(snapshot)
+
 	return true
 }
 
@@ -385,23 +405,15 @@ func (rf *Raft) readSnapshot(data []byte) {
 	go func() { rf.logCh <- void{} }()
 }
 
-func (rf *Raft) persistSnapshot(snapshot []byte) {
+func (rf *Raft) persistSnapshot(term, vf int, snapshot []byte) {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 
-	term := <-rf.term
-	voteFor := <-rf.voteFor
-	<-rf.logCh
-
 	e.Encode(rf.log)
 	e.Encode(term)
-	e.Encode(voteFor)
+	e.Encode(vf)
 	e.Encode(rf.snapshotLastIndex)
 	e.Encode(rf.snapshotLastTerm)
-
-	go func() { rf.term <- term }()
-	go func() { rf.voteFor <- voteFor }()
-	go func() { rf.logCh <- void{} }()
 
 	data := w.Bytes()
 	rf.persister.SaveStateAndSnapshot(data, snapshot)
