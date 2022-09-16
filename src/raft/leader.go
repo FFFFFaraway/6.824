@@ -111,6 +111,7 @@ func (rf *Raft) sendAllHB(done chan void) {
 				commitIndex := <-rf.commitIndex
 				<-rf.nextIndexCh
 
+				rf.nextIndex[i] = min(rf.nextIndex[i], len(rf.log)+1+rf.snapshotLastIndex)
 				// compute rf.nextIndex by reply
 				if reply.XTerm == -1 {
 					rf.nextIndex[i] = reply.XLen + 1
@@ -128,7 +129,7 @@ func (rf *Raft) sendAllHB(done chan void) {
 						rf.nextIndex[i] = reply.XIndex + 1
 					}
 				}
-				rf.nextIndex[i] = min(rf.nextIndex[i], len(rf.log)+1+rf.snapshotLastIndex)
+
 				// use the rf.nextIndex to recompute the AEArgs
 				preparation[i] = rf.prepare(done, i, term, commitIndex)
 
