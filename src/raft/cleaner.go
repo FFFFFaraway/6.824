@@ -66,19 +66,8 @@ func (rf *Raft) cleaner() {
 				ensureClosed(c)
 			case c := <-rf.tickerCtx:
 				ensureClosed(c)
-			// ##########################################################
-			case rf.electionTimer <- void{}:
-			case rf.term <- -1:
-			case rf.voteFor <- -1:
-			case rf.logCh <- void{}:
-			case rf.commitIndex <- -1:
-			case rf.lastApplied <- -1:
-			case rf.matchIndexCh <- void{}:
-			case rf.nextIndexCh <- void{}:
-			case rf.leaderCtx <- closedCh:
-			case rf.candidateCtx <- closedCh:
-			case rf.followerCtx <- closedCh:
-			case rf.tickerCtx <- closedCh:
+			// can't put anything like below! Otherwise, there will be many race problems
+			// case rf.logCh <- void{}:
 			case <-timeoutCh(WaitAllDie):
 				return
 			}

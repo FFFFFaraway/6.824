@@ -103,6 +103,12 @@ func (rf *Raft) Kill() {
 // GetState return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
+	select {
+	case <-rf.dead:
+		return -1, false
+	default:
+	}
+
 	term := <-rf.term
 	isLeader := false
 
@@ -135,6 +141,12 @@ func (rf *Raft) GetState() (int, bool) {
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	Debug(dDrop, rf.me, "Start a command")
+	select {
+	case <-rf.dead:
+		return -1, -1, false
+	default:
+	}
+
 	term, isLeader := rf.GetState()
 	index := -1
 
