@@ -13,31 +13,16 @@ func max(a, b int) int {
 	return b
 }
 
-func ensureClosed(i interface{}) {
-	switch ch := i.(type) {
-	case chan void:
-		if ch != nil {
-			select {
-			case <-ch:
-			default:
-				close(ch)
-			}
-		}
-	case chan int:
-		if ch != nil {
-			select {
-			case <-ch:
-			default:
-				close(ch)
-			}
-		}
-	case chan chan void:
-		if ch != nil {
-			select {
-			case <-ch:
-			default:
-				close(ch)
-			}
+type ChanT interface {
+	void | chan void | int
+}
+
+func ensureClosed[T ChanT](ch chan T) {
+	if ch != nil {
+		select {
+		case <-ch:
+		default:
+			close(ch)
 		}
 	}
 }
@@ -46,8 +31,6 @@ func (rf *Raft) cleaner() {
 	select {
 	case <-rf.dead:
 		Debug(dTerm, rf.me, "killed")
-		closedCh := make(chan void)
-		ensureClosed(closedCh)
 		for {
 			select {
 			case <-rf.electionTimer:

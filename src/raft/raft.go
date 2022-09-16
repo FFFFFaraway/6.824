@@ -103,16 +103,17 @@ func (rf *Raft) Kill() {
 // GetState return currentTerm and whether this server
 // believes it is the leader.
 func (rf *Raft) GetState() (int, bool) {
-	select {
-	case <-rf.dead:
+	term, dead := acquireOrDead(rf.dead, rf.term)
+	if dead {
 		return -1, false
-	default:
 	}
-
-	term := <-rf.term
+	done, dead := acquireOrDead(rf.dead, rf.leaderCtx)
+	if dead {
+		go func() { rf.term <- term }()
+		return -1, false
+	}
 	isLeader := false
 
-	done := <-rf.leaderCtx
 	select {
 	case <-done:
 	default:
@@ -123,6 +124,15 @@ func (rf *Raft) GetState() (int, bool) {
 	go func() { rf.leaderCtx <- done }()
 
 	return term, isLeader
+}
+
+func acquireOrDead[T ChanT](dead chan void, ch chan T) (val T, haveDead bool) {
+	select {
+	case <-dead:
+		return *new(T), true
+	case val = <-ch:
+		return val, false
+	}
 }
 
 // Start
@@ -140,23 +150,17 @@ func (rf *Raft) GetState() (int, bool) {
 // the leader.
 //
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
-	Debug(dDrop, rf.me, "Start a command")
-	select {
-	case <-rf.dead:
-		return -1, -1, false
-	default:
-	}
-
 	term, isLeader := rf.GetState()
 	index := -1
-
 	if !isLeader {
 		return index, term, isLeader
 	}
 
 	Debug(dLog, rf.me, "Append Log with Term %v", term)
-	// append entry to log
-	<-rf.logCh
+	_, dead := acquireOrDead(rf.dead, rf.logCh)
+	if dead {
+		return -1, -1, false
+	}
 	start := rf.snapshotLastIndex
 	rf.log = append(rf.log, &Entry{
 		Term:    term,
@@ -165,11 +169,18 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	index = len(rf.log) + start
 	go func() { rf.logCh <- void{} }()
 
-	vf := <-rf.voteFor
+	vf, dead := acquireOrDead(rf.dead, rf.voteFor)
+	if dead {
+		return -1, -1, false
+	}
 	go func() { rf.voteFor <- vf }()
 	rf.persist(term, vf)
 
-	leaderCtx := <-rf.leaderCtx
+	leaderCtx, dead := acquireOrDead(rf.dead, rf.leaderCtx)
+	if dead {
+		return -1, -1, false
+	}
+
 	go func() { rf.leaderCtx <- leaderCtx }()
 	go rf.sendAllHB(leaderCtx)
 
