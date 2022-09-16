@@ -44,10 +44,12 @@ type KVServer struct {
 	// map[specIndex int]committed NotificationId in spec index, chan int64
 	notification sync.Map
 	// for duplicate apply detection: applied to state machine but haven't received by client yet
-	// map[requestId int64]firstIndex int
-	appliedButNotReceived map[int64]int
+	// map[requestId int64]void
+	appliedButNotReceived map[int64]void
 	persister             *raft.Persister
-	snapshotLastIndex     int
+	// protected by dataCh
+	snapshotLastIndex int
+	commitIndex       int
 }
 
 func (kv *KVServer) applyCommand(index int, c Command) {
@@ -60,9 +62,8 @@ func (kv *KVServer) applyCommand(index int, c Command) {
 		// have applied before, then don't apply it again
 		return
 	}
-	kv.appliedButNotReceived[c.NotificationId] = index
+	kv.appliedButNotReceived[c.NotificationId] = void{}
 
-	<-kv.dataCh
 	switch c.Operator {
 	case PutOp:
 		kv.data[c.Key] = c.Value
@@ -74,7 +75,32 @@ func (kv *KVServer) applyCommand(index int, c Command) {
 			kv.data[c.Key] = c.Value
 		}
 	}
-	go func() { kv.dataCh <- void{} }()
+	if v, exist := kv.data[c.Key]; exist {
+		if c.Operator == GetOp {
+			Debug(dSnap, kv.me, "Get %v = %v, index %v", c.Key, v, index)
+		} else {
+			Debug(dSnap, kv.me, "Update %v = %v, index %v", c.Key, v, index)
+		}
+	}
+}
+
+func (kv *KVServer) compareSnapshot() {
+	for {
+		select {
+		case <-kv.dead:
+			return
+		case <-timeoutCh(100 * time.Millisecond):
+			<-kv.dataCh
+			if kv.maxraftstate != -1 &&
+				kv.commitIndex > kv.snapshotLastIndex &&
+				kv.persister.RaftStateSize() > 7*kv.maxraftstate {
+				Debug(dSnap, kv.me, "Snapshot before %v", kv.commitIndex)
+				kv.persist(kv.commitIndex)
+				Debug(dSnap, kv.me, "Done Snapshot before %v", kv.commitIndex)
+			}
+			go func() { kv.dataCh <- void{} }()
+		}
+	}
 }
 
 func (kv *KVServer) waiting() {
@@ -84,7 +110,13 @@ func (kv *KVServer) waiting() {
 			return
 		case msg := <-kv.applyCh:
 			if msg.CommandValid {
+				<-kv.dataCh
+
 				kv.applyCommand(msg.CommandIndex, msg.Command.(Command))
+				kv.commitIndex = msg.CommandIndex
+
+				go func() { kv.dataCh <- void{} }()
+
 				// after command have been applied, then add notification
 				waitChInter, exist := kv.notification.Load(msg.CommandIndex)
 				// request timeout (notification deleted), but command finally applied
@@ -92,11 +124,6 @@ func (kv *KVServer) waiting() {
 				if exist {
 					// if existed, there must be someone waiting for it
 					waitChInter.(chan int64) <- msg.Command.(Command).NotificationId
-				}
-				if kv.maxraftstate != -1 && kv.persister.RaftStateSize() > 7*kv.maxraftstate {
-					Debug(dSnap, kv.me, "Before snapshot, raft size %v", kv.persister.RaftStateSize())
-					kv.persist(msg.CommandIndex)
-					Debug(dSnap, kv.me, "After snapshot, raft size %v", kv.persister.RaftStateSize())
 				}
 			} else if msg.SnapshotValid {
 				if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
@@ -118,9 +145,7 @@ func (kv *KVServer) persist(index int) {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(index)
-	<-kv.dataCh
 	e.Encode(kv.data)
-	go func() { kv.dataCh <- void{} }()
 	e.Encode(kv.appliedButNotReceived)
 	kv.rf.Snapshot(index, w.Bytes())
 }
@@ -131,11 +156,12 @@ func (kv *KVServer) readPersist(snapshot []byte) {
 	}
 	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
-	d.Decode(&kv.snapshotLastIndex)
 	<-kv.dataCh
+	d.Decode(&kv.snapshotLastIndex)
 	d.Decode(&kv.data)
-	go func() { kv.dataCh <- void{} }()
 	d.Decode(&kv.appliedButNotReceived)
+	kv.commitIndex = kv.snapshotLastIndex
+	go func() { kv.dataCh <- void{} }()
 }
 
 func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
@@ -284,30 +310,24 @@ func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persiste
 	kv.maxraftstate = maxraftstate
 
 	// You may need initialization code here.
-	kv.appliedButNotReceived = make(map[int64]int)
+	kv.appliedButNotReceived = make(map[int64]void)
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.dataCh = make(chan void)
-	go func() { kv.dataCh <- void{} }()
 	kv.data = make(map[string]string)
 	kv.persister = persister
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	kv.dead = make(chan void)
+	kv.snapshotLastIndex = 0
+	kv.commitIndex = 0
+
+	go func() { kv.dataCh <- void{} }()
 
 	kv.readPersist(kv.persister.ReadSnapshot())
 
 	Debug(dInfo, kv.me, "Restarted with lastIndex %v", kv.snapshotLastIndex)
 
-	// if some command not include in the snapshot
-	// then need to delete it from appliedButNotReceived, because it now becomes not applied
-	for requestId, index := range kv.appliedButNotReceived {
-		Debug(dInfo, kv.me, "Entry: %v , %v", requestId, index)
-		if index > kv.snapshotLastIndex {
-			Debug(dInfo, kv.me, "Delete request %v in index %v", requestId, index)
-			delete(kv.appliedButNotReceived, requestId)
-		}
-	}
-
 	go kv.waiting()
+	go kv.compareSnapshot()
 	go kv.cleaner()
 
 	return kv
