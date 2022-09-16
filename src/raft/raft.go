@@ -363,6 +363,8 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 	// reset log
 	if lastIncludedIndex+1-1-oldStart < len(rf.log) {
 		rf.log = rf.log[lastIncludedIndex+1-1-oldStart:]
+	} else {
+		rf.log = make([]*Entry, 0)
 	}
 
 	lastApplied := <-rf.lastApplied
