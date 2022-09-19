@@ -20,11 +20,11 @@ const (
 )
 
 type Command struct {
-	Key            string
-	Value          string
-	Operator       int
-	NotificationId int64
-	LastSuc        int64
+	Key       string
+	Value     string
+	Operator  int
+	RequestId int64
+	LastSuc   int64
 }
 
 type void struct{}
@@ -41,7 +41,7 @@ type KVServer struct {
 	dataCh chan void
 	data   map[string]string
 	// each index allocate a channel to inform the waiting request
-	// map[specIndex int]committed NotificationId in spec index, chan int64
+	// map[specIndex int]committed RequestId in spec index, chan int64
 	notification sync.Map
 	// for duplicate apply detection: applied to state machine but haven't received by client yet
 	// map[requestId int64]void
@@ -57,12 +57,12 @@ func (kv *KVServer) applyCommand(index int, c Command) {
 
 	// lastSuc received by client, delete it
 	delete(kv.appliedButNotReceived, c.LastSuc)
-	_, exist := kv.appliedButNotReceived[c.NotificationId]
+	_, exist := kv.appliedButNotReceived[c.RequestId]
 	if exist {
 		// have applied before, then don't apply it again
 		return
 	}
-	kv.appliedButNotReceived[c.NotificationId] = void{}
+	kv.appliedButNotReceived[c.RequestId] = void{}
 
 	switch c.Operator {
 	case PutOp:
@@ -123,7 +123,7 @@ func (kv *KVServer) waiting() {
 				// or the server is follower, no request is waiting
 				if exist {
 					// if existed, there must be someone waiting for it
-					waitChInter.(chan int64) <- msg.Command.(Command).NotificationId
+					waitChInter.(chan int64) <- msg.Command.(Command).RequestId
 				}
 			} else if msg.SnapshotValid {
 				if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
@@ -164,19 +164,11 @@ func (kv *KVServer) readPersist(snapshot []byte) {
 	go func() { kv.dataCh <- void{} }()
 }
 
-func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
-	//Debug(dInfo, kv.me, "Get %+v", args)
-	//defer Debug(dInfo, kv.me, "Get reply %+v", reply)
-	specId := args.RequestId
-	index, _, isLeader := kv.rf.Start(Command{
-		Key:            args.Key,
-		Operator:       GetOp,
-		NotificationId: specId,
-		LastSuc:        args.LastSuc,
-	})
+func (kv *KVServer) Commit(command Command, postFunc func()) (WrongLeader bool) {
+	specId := command.RequestId
+	index, _, isLeader := kv.rf.Start(command)
 	if !isLeader {
-		reply.Err = ErrWrongLeader
-		return
+		return true
 	}
 
 	waitCh := make(chan int64)
@@ -193,16 +185,42 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 	}()
 
+	var opName string
+	switch command.Operator {
+	case GetOp:
+		opName = "Get"
+	case PutOp:
+		fallthrough
+	case AppendOp:
+		opName = "PutAppend"
+	}
+
 	select {
 	case <-kv.dead:
-		reply.Err = ErrWrongLeader
 		Debug(dInfo, kv.me, "Killed")
 	case realId := <-waitCh:
 		if realId != specId {
-			reply.Err = ErrWrongLeader
-			Debug(dInfo, kv.me, "Get canceled spec: %v, real: %v", specId, realId)
-			return
+			Debug(dInfo, kv.me, opName+" canceled spec: %v, real: %v", specId, realId)
+			return true
 		}
+		postFunc()
+		Debug(dInfo, kv.me, opName+" ok %v", specId)
+		return false
+	case <-timeoutCh(waitTimeout):
+		Debug(dInfo, kv.me, opName+" timeout")
+	}
+	return true
+}
+
+func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
+	//Debug(dInfo, kv.me, "Get %+v", args)
+	//defer Debug(dInfo, kv.me, "Get reply %+v", reply)
+	if kv.Commit(Command{
+		Key:       args.Key,
+		Operator:  GetOp,
+		RequestId: args.RequestId,
+		LastSuc:   args.LastSuc,
+	}, func() {
 		<-kv.dataCh
 		v, exist := kv.data[args.Key]
 		go func() { kv.dataCh <- void{} }()
@@ -212,65 +230,36 @@ func (kv *KVServer) Get(args *GetArgs, reply *GetReply) {
 		}
 		reply.Err = OK
 		reply.Value = v
-		Debug(dInfo, kv.me, "Get ok %v", specId)
-	case <-timeoutCh(waitTimeout):
+	}) {
 		reply.Err = ErrWrongLeader
-		Debug(dInfo, kv.me, "Get timeout")
 	}
 }
 
 func (kv *KVServer) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	//Debug(dInfo, kv.me, "PutAppend %+v", args)
 	//defer Debug(dInfo, kv.me, "PutAppend reply %+v", reply)
-	Operator := PutOp
-	if args.Op == "Put" {
-	} else if args.Op == "Append" {
+	Operator := -1
+	switch args.Op {
+	case "Put":
+		Operator = PutOp
+	case "Append":
 		Operator = AppendOp
-	} else {
+	default:
 		Debug(dError, kv.me, "ERROR PutAppend unknown op: %v", args.Op)
 		return
 	}
 
-	specId := args.RequestId
-	index, _, isLeader := kv.rf.Start(Command{
-		Key:            args.Key,
-		Value:          args.Value,
-		Operator:       Operator,
-		NotificationId: specId,
-		LastSuc:        args.LastSuc,
-	})
-	if !isLeader {
+	if kv.Commit(Command{
+		Key:       args.Key,
+		Value:     args.Value,
+		Operator:  Operator,
+		RequestId: args.RequestId,
+		LastSuc:   args.LastSuc,
+	}, func() {}) {
 		reply.Err = ErrWrongLeader
 		return
 	}
-
-	waitCh := make(chan int64)
-	kv.notification.Store(index, waitCh)
-	defer func() {
-		kv.notification.Delete(index)
-		select {
-		case id := <-waitCh:
-			Debug(dInfo, kv.me, "delete index %v with request id %v", index, id)
-		default:
-		}
-	}()
-
-	select {
-	case <-kv.dead:
-		reply.Err = ErrWrongLeader
-		Debug(dInfo, kv.me, "Killed")
-	case realId := <-waitCh:
-		if realId != specId {
-			reply.Err = ErrWrongLeader
-			Debug(dInfo, kv.me, "PutAppend canceled spec:%v, real: %v", specId, realId)
-			return
-		}
-		reply.Err = OK
-		Debug(dInfo, kv.me, "PutAppend ok %v", specId)
-	case <-timeoutCh(waitTimeout):
-		reply.Err = ErrWrongLeader
-		Debug(dInfo, kv.me, "PutAppend timeout")
-	}
+	reply.Err = OK
 }
 
 func (kv *KVServer) cleaner() {
@@ -299,7 +288,6 @@ func (kv *KVServer) cleaner() {
 // you don't need to snapshot.
 // StartKVServer() must return quickly, so it should start goroutines
 // for any long-running work.
-//
 func StartKVServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister, maxraftstate int) *KVServer {
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.

@@ -14,8 +14,8 @@ const (
 type Clerk struct {
 	// read only
 	servers []*labrpc.ClientEnd
-	leader  chan int
-	lastSuc chan int64
+	leader  int
+	lastSuc int64
 }
 
 func nrand() int64 {
@@ -28,10 +28,8 @@ func nrand() int64 {
 func MakeClerk(servers []*labrpc.ClientEnd) *Clerk {
 	ck := new(Clerk)
 	ck.servers = servers
-	ck.leader = make(chan int)
-	ck.lastSuc = make(chan int64)
-	go func() { ck.leader <- 0 }()
-	go func() { ck.lastSuc <- 0 }()
+	ck.leader = 0
+	ck.lastSuc = 0
 	return ck
 }
 
@@ -50,32 +48,25 @@ func (ck *Clerk) nextServer(server int) int {
 // the types of args and reply (including whether they are pointers)
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
-//
 func (ck *Clerk) Get(key string) string {
-	reply := &GetReply{}
 	rid := nrand()
-	lastSuc := <-ck.lastSuc
-	go func() { ck.lastSuc <- lastSuc }()
 	for {
-		try := <-ck.leader
-		go func() { ck.leader <- try }()
-
-		ok := ck.servers[try].Call("KVServer.Get", &GetArgs{Key: key, RequestId: rid, LastSuc: lastSuc}, reply)
-		if ok {
+		reply := &GetReply{}
+		if ck.servers[ck.leader].Call("KVServer.Get", &GetArgs{
+			Key:       key,
+			RequestId: rid,
+			LastSuc:   ck.lastSuc,
+		}, reply) {
 			switch reply.Err {
 			case OK:
-				<-ck.lastSuc
-				go func() { ck.lastSuc <- rid }()
+				ck.lastSuc = rid
 				return reply.Value
 			case ErrNoKey:
 				return ""
 			case ErrWrongLeader:
 			}
 		}
-		// no others modify it
-		if try == <-ck.leader {
-			go func() { ck.leader <- ck.nextServer(try) }()
-		}
+		ck.leader = ck.nextServer(ck.leader)
 		time.Sleep(TryServerTimeout)
 	}
 }
@@ -89,37 +80,25 @@ func (ck *Clerk) Get(key string) string {
 // the types of args and reply (including whether they are pointers)
 // must match the declared types of the RPC handler function's
 // arguments. and reply must be passed as a pointer.
-//
 func (ck *Clerk) PutAppend(key string, value string, op string) {
-	reply := PutAppendReply{}
 	rid := nrand()
-	lastSuc := <-ck.lastSuc
-	go func() { ck.lastSuc <- lastSuc }()
 	for {
-		try := <-ck.leader
-		go func() { ck.leader <- try }()
-
-		ok := ck.servers[try].Call("KVServer.PutAppend", &PutAppendArgs{
+		reply := &PutAppendReply{}
+		if ck.servers[ck.leader].Call("KVServer.PutAppend", &PutAppendArgs{
 			Key:       key,
 			Value:     value,
 			Op:        op,
 			RequestId: rid,
-			LastSuc:   lastSuc,
-		}, &reply)
-
-		if ok {
+			LastSuc:   ck.lastSuc,
+		}, reply) {
 			switch reply.Err {
 			case OK:
-				<-ck.lastSuc
-				go func() { ck.lastSuc <- rid }()
+				ck.lastSuc = rid
 				return
 			case ErrWrongLeader:
 			}
 		}
-		// no others modify it
-		if try == <-ck.leader {
-			go func() { ck.leader <- ck.nextServer(try) }()
-		}
+		ck.leader = ck.nextServer(ck.leader)
 		time.Sleep(TryServerTimeout)
 	}
 }
