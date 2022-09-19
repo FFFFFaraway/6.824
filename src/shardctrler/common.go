@@ -17,10 +17,10 @@ package shardctrler
 // You will need to add fields to the RPC argument structs.
 //
 
-// The number of shards.
+// NShards The number of shards.
 const NShards = 10
 
-// A configuration -- an assignment of shards to groups.
+// Config A configuration -- an assignment of shards to groups.
 // Please don't change this.
 type Config struct {
 	Num    int              // config number
@@ -35,7 +35,9 @@ const (
 type Err string
 
 type JoinArgs struct {
-	Servers map[int][]string // new GID -> servers mappings
+	Servers   map[int][]string // new GID -> servers mappings
+	RequestId int64
+	LastSuc   int64
 }
 
 type JoinReply struct {
@@ -44,7 +46,9 @@ type JoinReply struct {
 }
 
 type LeaveArgs struct {
-	GIDs []int
+	GIDs      []int
+	RequestId int64
+	LastSuc   int64
 }
 
 type LeaveReply struct {
@@ -53,8 +57,10 @@ type LeaveReply struct {
 }
 
 type MoveArgs struct {
-	Shard int
-	GID   int
+	Shard     int
+	GID       int
+	RequestId int64
+	LastSuc   int64
 }
 
 type MoveReply struct {
@@ -63,7 +69,9 @@ type MoveReply struct {
 }
 
 type QueryArgs struct {
-	Num int // desired config number
+	Num       int // desired config number
+	RequestId int64
+	LastSuc   int64
 }
 
 type QueryReply struct {
