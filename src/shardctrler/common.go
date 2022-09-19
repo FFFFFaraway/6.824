@@ -53,7 +53,7 @@ type LeaveArgs struct {
 
 type LeaveReply struct {
 	WrongLeader bool
-	Err         Err
+	//Err         Err
 }
 
 type MoveArgs struct {

@@ -114,11 +114,6 @@ func (sc *ShardCtrler) applyCommand(index int, c Op) {
 			sc.configs = append(sc.configs, newConfig)
 			return
 		}
-		//low := NShards / len(lastConfig.Groups)
-		//high := low
-		//if NShards%len(lastConfig.Groups) != 0 {
-		//	high++
-		//}
 		newConfig := Config{
 			Num:    lastConfig.Num + 1,
 			Groups: mapCopy(lastConfig.Groups),
@@ -172,19 +167,13 @@ func (sc *ShardCtrler) waiting() {
 	}
 }
 
-func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
+func (sc *ShardCtrler) Commit(command Op, postFunc func()) (WrongLeader bool) {
 	//Debug(dInfo, sc.me, "Get %+v", args)
 	//defer Debug(dInfo, sc.me, "Get reply %+v", reply)
-	specId := args.RequestId
-	index, _, isLeader := sc.rf.Start(Op{
-		Servers:   args.Servers,
-		Operator:  joinOp,
-		RequestId: specId,
-		LastSuc:   args.LastSuc,
-	})
+	specId := command.RequestId
+	index, _, isLeader := sc.rf.Start(command)
 	if !isLeader {
-		reply.WrongLeader = true
-		return
+		return true
 	}
 
 	waitCh := make(chan int64)
@@ -201,159 +190,77 @@ func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
 		}
 	}()
 
+	var opName string
+	switch command.Operator {
+	case joinOp:
+		opName = "Join"
+	case LeaveOp:
+		opName = "Leave"
+	case QueryOp:
+		opName = "Query"
+	case MoveOp:
+		opName = "Move"
+	}
+
 	select {
 	case <-sc.dead:
-		reply.WrongLeader = true
 		Debug(dInfo, sc.me, "Killed")
 	case realId := <-waitCh:
 		if realId != specId {
-			reply.WrongLeader = true
-			Debug(dInfo, sc.me, "Join canceled spec: %v, real: %v", specId, realId)
-			return
+			Debug(dInfo, sc.me, opName+" canceled spec: %v, real: %v", specId, realId)
 		}
-		reply.Err = OK
-		reply.WrongLeader = false
-		Debug(dInfo, sc.me, "Join ok %v", specId)
+		postFunc()
+		Debug(dInfo, sc.me, opName+" ok %v", specId)
+		return false
 	case <-timeoutCh(waitTimeout):
-		reply.WrongLeader = true
-		Debug(dInfo, sc.me, "Join timeout")
+		Debug(dInfo, sc.me, opName+" timeout")
 	}
+	return true
+}
+
+func (sc *ShardCtrler) Join(args *JoinArgs, reply *JoinReply) {
+	//Debug(dInfo, sc.me, "Get %+v", args)
+	//defer Debug(dInfo, sc.me, "Get reply %+v", reply)
+	reply.WrongLeader = sc.Commit(Op{
+		Servers:   args.Servers,
+		Operator:  joinOp,
+		RequestId: args.RequestId,
+		LastSuc:   args.LastSuc,
+	}, func() {})
 }
 
 func (sc *ShardCtrler) Leave(args *LeaveArgs, reply *LeaveReply) {
 	//Debug(dInfo, sc.me, "Leave %+v", args)
 	//defer Debug(dInfo, kv.me, "Get reply %+v", reply)
-	specId := args.RequestId
-	index, _, isLeader := sc.rf.Start(Op{
+	reply.WrongLeader = sc.Commit(Op{
 		GIDs:      args.GIDs,
 		Operator:  LeaveOp,
-		RequestId: specId,
+		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,
-	})
-	if !isLeader {
-		reply.WrongLeader = true
-		return
-	}
-
-	waitCh := make(chan int64)
-	sc.notification.Store(index, waitCh)
-	defer func() {
-		// delete first
-		sc.notification.Delete(index)
-		// it's possible that the notification has been loaded, but haven't sent signal yet
-		// need to wait again
-		select {
-		case id := <-waitCh:
-			Debug(dInfo, sc.me, "delete index %v with request id %v", index, id)
-		default:
-		}
-	}()
-
-	select {
-	case <-sc.dead:
-		reply.WrongLeader = true
-		Debug(dInfo, sc.me, "Killed")
-	case realId := <-waitCh:
-		if realId != specId {
-			reply.WrongLeader = true
-			Debug(dInfo, sc.me, "Leave canceled spec: %v, real: %v", specId, realId)
-			return
-		}
-		reply.Err = OK
-		Debug(dInfo, sc.me, "Leave ok %v", specId)
-	case <-timeoutCh(waitTimeout):
-		reply.WrongLeader = true
-		Debug(dInfo, sc.me, "Leave timeout")
-	}
+	}, func() {})
 }
 
 func (sc *ShardCtrler) Move(args *MoveArgs, reply *MoveReply) {
 	//Debug(dInfo, kv.me, "Get %+v", args)
 	//defer Debug(dInfo, kv.me, "Get reply %+v", reply)
-	specId := args.RequestId
-	index, _, isLeader := sc.rf.Start(Op{
+	reply.WrongLeader = sc.Commit(Op{
 		Shard:     args.Shard,
 		GID:       args.GID,
 		Operator:  MoveOp,
-		RequestId: specId,
+		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,
-	})
-	if !isLeader {
-		reply.WrongLeader = true
-		return
-	}
-
-	waitCh := make(chan int64)
-	sc.notification.Store(index, waitCh)
-	defer func() {
-		// delete first
-		sc.notification.Delete(index)
-		// it's possible that the notification has been loaded, but haven't sent signal yet
-		// need to wait again
-		select {
-		case id := <-waitCh:
-			Debug(dInfo, sc.me, "delete index %v with request id %v", index, id)
-		default:
-		}
-	}()
-
-	select {
-	case <-sc.dead:
-		reply.WrongLeader = true
-		Debug(dInfo, sc.me, "Killed")
-	case realId := <-waitCh:
-		if realId != specId {
-			reply.WrongLeader = true
-			Debug(dInfo, sc.me, "Move canceled spec: %v, real: %v", specId, realId)
-			return
-		}
-		reply.Err = OK
-		Debug(dInfo, sc.me, "Move ok %v", specId)
-	case <-timeoutCh(waitTimeout):
-		reply.WrongLeader = true
-		Debug(dInfo, sc.me, "Move timeout")
-	}
+	}, func() {})
 }
 
 func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 	//Debug(dInfo, kv.me, "Get %+v", args)
 	//defer Debug(dInfo, kv.me, "Get reply %+v", reply)
-	specId := args.RequestId
-	index, _, isLeader := sc.rf.Start(Op{
+	reply.WrongLeader = sc.Commit(Op{
 		Num:       args.Num,
 		Operator:  QueryOp,
-		RequestId: specId,
+		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,
-	})
-	if !isLeader {
-		reply.WrongLeader = true
-		return
-	}
-
-	waitCh := make(chan int64)
-	sc.notification.Store(index, waitCh)
-	defer func() {
-		// delete first
-		sc.notification.Delete(index)
-		// it's possible that the notification has been loaded, but haven't sent signal yet
-		// need to wait again
-		select {
-		case id := <-waitCh:
-			Debug(dInfo, sc.me, "delete index %v with request id %v", index, id)
-		default:
-		}
-	}()
-
-	select {
-	case <-sc.dead:
-		reply.WrongLeader = true
-		Debug(dInfo, sc.me, "Killed")
-	case realId := <-waitCh:
-		if realId != specId {
-			reply.WrongLeader = true
-			Debug(dInfo, sc.me, "Query canceled spec: %v, real: %v", specId, realId)
-			return
-		}
+	}, func() {
 		sc.mu.Lock()
 		if args.Num == -1 {
 			reply.Config = sc.configs[len(sc.configs)-1]
@@ -361,12 +268,7 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 			reply.Config = sc.configs[args.Num]
 		}
 		sc.mu.Unlock()
-		reply.Err = OK
-		Debug(dInfo, sc.me, "Query ok %v", specId)
-	case <-timeoutCh(waitTimeout):
-		reply.WrongLeader = true
-		Debug(dInfo, sc.me, "Query timeout")
-	}
+	})
 }
 
 // Kill
@@ -374,7 +276,6 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 // be needed again. you are not required to do anything
 // in Kill(), but it might be convenient to (for example)
 // turn off debug output from this instance.
-//
 func (sc *ShardCtrler) Kill() {
 	ensureClosed(sc.dead)
 	sc.rf.Kill()
@@ -391,7 +292,6 @@ func (sc *ShardCtrler) Raft() *raft.Raft {
 // servers that will cooperate via Raft to
 // form the fault-tolerant shardctrler service.
 // me is the index of the current server in servers[].
-//
 func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister) *ShardCtrler {
 	sc := new(ShardCtrler)
 	sc.me = me
