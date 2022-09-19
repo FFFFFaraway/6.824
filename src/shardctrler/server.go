@@ -208,6 +208,7 @@ func (sc *ShardCtrler) Commit(command Op, postFunc func()) (WrongLeader bool) {
 	case realId := <-waitCh:
 		if realId != specId {
 			Debug(dInfo, sc.me, opName+" canceled spec: %v, real: %v", specId, realId)
+			return true
 		}
 		postFunc()
 		Debug(dInfo, sc.me, opName+" ok %v", specId)
