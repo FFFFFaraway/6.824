@@ -59,7 +59,7 @@ func init() {
 }
 
 func Debug(topic logTopic, who int, format string, a ...interface{}) {
-	if topic == dDrop || topic == dClean || topic != dServer {
+	if topic == dDrop || topic == dClean {
 		return
 	}
 	if debugVerbosity >= 1 {

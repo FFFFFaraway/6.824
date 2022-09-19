@@ -156,7 +156,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 		return index, term, isLeader
 	}
 
-	Debug(dLog, rf.me, "Append Log with Term %v", term)
+	Debug(dLog, rf.me, "Append Log with Term %v, command %v", term, command)
 	_, dead := acquireOrDead(rf.dead, rf.logCh)
 	if dead {
 		return -1, -1, false
@@ -279,7 +279,10 @@ type TermCnt struct {
 // see paper's Figure 2 for a description of what should be persistent.
 //
 func (rf *Raft) persist(term, voteFor int) {
-	<-rf.logCh
+	_, dead := acquireOrDead(rf.dead, rf.logCh)
+	if dead {
+		return
+	}
 
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
