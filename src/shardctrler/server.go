@@ -47,7 +47,7 @@ type Op struct {
 }
 
 const (
-	waitTimeout = 300 * time.Millisecond
+	waitTimeout = 500 * time.Millisecond
 )
 
 func (sc *ShardCtrler) balance(groups map[int][]string) (shards [10]int) {

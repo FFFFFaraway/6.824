@@ -51,7 +51,7 @@ fi
 
 rm test-*
 # Default to 100 runs unless otherwise specified
-runs=128
+runs=1280
 if [ $# -gt 0 ]; then
 	runs="$1"
 fi
