@@ -14,6 +14,7 @@ const (
 	GetOp = iota
 	PutOp
 	AppendOp
+	ConfigOp
 )
 
 const (
@@ -26,10 +27,12 @@ type Op struct {
 	Operator  int
 	RequestId int64
 	LastSuc   int64
+	Config    shardctrler.Config
 }
 
 type ShardKV struct {
-	//mu           sync.Mutex
+	// mu protect config only
+	mu           sync.Mutex
 	me           int
 	rf           *raft.Raft
 	applyCh      chan raft.ApplyMsg
@@ -39,6 +42,7 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	config shardctrler.Config
 	dead   chan void
 	mck    *shardctrler.Clerk
 	dataCh chan void
@@ -77,6 +81,10 @@ func (kv *ShardKV) applyCommand(index int, c Op) {
 		} else {
 			kv.data[c.Key] = c.Value
 		}
+	case ConfigOp:
+		kv.mu.Lock()
+		kv.config = c.Config
+		kv.mu.Unlock()
 	}
 	if v, exist := kv.data[c.Key]; exist {
 		if c.Operator == GetOp {
@@ -103,6 +111,38 @@ func (kv *ShardKV) compareSnapshot() {
 			}
 			go func() { kv.dataCh <- void{} }()
 		}
+	}
+}
+
+func (kv *ShardKV) updateConfig() {
+	for {
+		time.Sleep(ConfigurationTimeout)
+		_, isLeader := kv.rf.GetState()
+		// only the leader need to update the configuration
+		if !isLeader {
+			continue
+		}
+
+		newConfig := kv.mck.Query(-1)
+		// There are no others writing it, so we can copy once to avoid waiting lock
+		kv.mu.Lock()
+		curNum := kv.config.Num
+		kv.mu.Unlock()
+
+		if curNum == newConfig.Num {
+			continue
+		}
+
+		// isolation from client request id
+		rid := int64(-newConfig.Num)
+		// may fail, but we will continue try it
+		// do not update here, must update through the applyCh
+		kv.Commit(Op{
+			Config:    newConfig,
+			Operator:  ConfigOp,
+			RequestId: rid,
+			LastSuc:   int64(-curNum),
+		}, func() {})
 	}
 }
 
@@ -218,6 +258,14 @@ func (kv *ShardKV) Commit(command Op, postFunc func()) (WrongLeader bool) {
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	//Debug(dInfo, kv.me, "Get %+v", args)
 	//defer Debug(dInfo, kv.me, "Get reply %+v", reply)
+	shard := key2shard(args.Key)
+	kv.mu.Lock()
+	specGID := kv.config.Shards[shard]
+	kv.mu.Unlock()
+	if specGID != kv.gid {
+		reply.Err = ErrWrongGroup
+		return
+	}
 	if kv.Commit(Op{
 		Key:       args.Key,
 		Operator:  GetOp,
@@ -241,6 +289,15 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	//Debug(dInfo, kv.me, "PutAppend %+v", args)
 	//defer Debug(dInfo, kv.me, "PutAppend reply %+v", reply)
+	shard := key2shard(args.Key)
+	kv.mu.Lock()
+	specGID := kv.config.Shards[shard]
+	kv.mu.Unlock()
+	if specGID != kv.gid {
+		reply.Err = ErrWrongGroup
+		return
+	}
+
 	Operator := -1
 	switch args.Op {
 	case "Put":
@@ -339,6 +396,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.waiting()
 	go kv.compareSnapshot()
 	go kv.cleaner()
+	go kv.updateConfig()
 
 	return kv
 }
