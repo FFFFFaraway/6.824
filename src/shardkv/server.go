@@ -60,7 +60,7 @@ type ShardKV struct {
 }
 
 func (kv *ShardKV) applyCommand(index int, c Op) {
-	//Debug(dApply, kv.me, "Apply Command %+v", c)
+	//Debug(dApply, kv.gid, kv.me, "Apply Command %+v", c)
 
 	// lastSuc received by client, delete it
 	delete(kv.appliedButNotReceived, c.LastSuc)
@@ -86,13 +86,13 @@ func (kv *ShardKV) applyCommand(index int, c Op) {
 		kv.config = c.Config
 		kv.mu.Unlock()
 	}
-	if v, exist := kv.data[c.Key]; exist {
-		if c.Operator == GetOp {
-			Debug(dSnap, kv.me, "Get %v = %v, index %v", c.Key, v, index)
-		} else {
-			Debug(dSnap, kv.me, "Update %v = %v, index %v", c.Key, v, index)
-		}
-	}
+	//if v, exist := kv.data[c.Key]; exist {
+	//	if c.Operator == GetOp {
+	//		Debug(dSnap, kv.gid, kv.me, "Get %v = %v, index %v", c.Key, v, index)
+	//	} else {
+	//		Debug(dSnap, kv.gid, kv.me, "Update %v = %v, index %v", c.Key, v, index)
+	//	}
+	//}
 }
 
 func (kv *ShardKV) compareSnapshot() {
@@ -105,9 +105,9 @@ func (kv *ShardKV) compareSnapshot() {
 			if kv.maxraftstate != -1 &&
 				kv.commitIndex > kv.snapshotLastIndex &&
 				kv.persister.RaftStateSize() > 7*kv.maxraftstate {
-				Debug(dSnap, kv.me, "Snapshot before %v", kv.commitIndex)
+				Debug(dSnap, kv.gid, kv.me, "Snapshot before %v", kv.commitIndex)
 				kv.persist(kv.commitIndex)
-				Debug(dSnap, kv.me, "Done Snapshot before %v", kv.commitIndex)
+				Debug(dSnap, kv.gid, kv.me, "Done Snapshot before %v", kv.commitIndex)
 			}
 			go func() { kv.dataCh <- void{} }()
 		}
@@ -223,7 +223,7 @@ func (kv *ShardKV) Commit(command Op, postFunc func()) (WrongLeader bool) {
 		// need to wait again
 		select {
 		case id := <-waitCh:
-			Debug(dInfo, kv.me, "delete index %v with request id %v", index, id)
+			Debug(dClean, kv.gid, kv.me, "delete index %v with request id %v", index, id)
 		default:
 		}
 	}()
@@ -236,28 +236,30 @@ func (kv *ShardKV) Commit(command Op, postFunc func()) (WrongLeader bool) {
 		fallthrough
 	case AppendOp:
 		opName = "PutAppend"
+	case ConfigOp:
+		opName = "Update Config"
 	}
 
 	select {
 	case <-kv.dead:
-		Debug(dInfo, kv.me, "Killed")
+		Debug(dClean, kv.gid, kv.me, "Killed")
 	case realId := <-waitCh:
 		if realId != specId {
-			Debug(dInfo, kv.me, opName+" canceled spec: %v, real: %v", specId, realId)
+			Debug(dInfo, kv.gid, kv.me, opName+" canceled spec: %v, real: %v", specId, realId)
 			return true
 		}
 		postFunc()
-		Debug(dInfo, kv.me, opName+" ok %v", specId)
+		Debug(dInfo, kv.gid, kv.me, opName+" ok %v", specId)
 		return false
 	case <-timeoutCh(waitTimeout):
-		Debug(dInfo, kv.me, opName+" timeout")
+		Debug(dInfo, kv.gid, kv.me, opName+" timeout")
 	}
 	return true
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
-	//Debug(dInfo, kv.me, "Get %+v", args)
-	//defer Debug(dInfo, kv.me, "Get reply %+v", reply)
+	//Debug(dInfo, kv.gid, kv.me, "Get %+v", args)
+	//defer Debug(dInfo, kv.gid, kv.me, "Get reply %+v", reply)
 	shard := key2shard(args.Key)
 	kv.mu.Lock()
 	specGID := kv.config.Shards[shard]
@@ -287,8 +289,8 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	//Debug(dInfo, kv.me, "PutAppend %+v", args)
-	//defer Debug(dInfo, kv.me, "PutAppend reply %+v", reply)
+	//Debug(dInfo, kv.gid, kv.me, "PutAppend %+v", args)
+	//defer Debug(dInfo, kv.gid, kv.me, "PutAppend reply %+v", reply)
 	shard := key2shard(args.Key)
 	kv.mu.Lock()
 	specGID := kv.config.Shards[shard]
@@ -305,7 +307,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	case "Append":
 		Operator = AppendOp
 	default:
-		Debug(dError, kv.me, "ERROR PutAppend unknown op: %v", args.Op)
+		Debug(dError, kv.gid, kv.me, "ERROR PutAppend unknown op: %v", args.Op)
 		return
 	}
 
@@ -391,7 +393,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	kv.readPersist(kv.persister.ReadSnapshot())
 
-	Debug(dInfo, kv.me, "Restarted with lastIndex %v", kv.snapshotLastIndex)
+	Debug(dInfo, kv.gid, kv.me, "Restarted with lastIndex %v", kv.snapshotLastIndex)
 
 	go kv.waiting()
 	go kv.compareSnapshot()
