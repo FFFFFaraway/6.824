@@ -152,6 +152,30 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	}
 }
 
+func (ck *Clerk) GetShard(shard, gid int, servers []string, config shardctrler.Config) map[string]string {
+	rid := nrand()
+	for {
+		leaderIndex, exist := ck.leader[gid]
+		if !exist || leaderIndex >= len(servers) {
+			ck.leader[gid] = 0
+			leaderIndex = 0
+		}
+		reply := &GetShardReply{}
+		if ck.make_end(servers[leaderIndex]).Call("ShardKV.GetShard", &GetShardArgs{
+			Shard:     shard,
+			Config:    config,
+			RequestId: rid,
+			LastSuc:   ck.lastSuc,
+		}, &reply) {
+			if reply.Err == OK {
+				return reply.Data
+			}
+		}
+		ck.leader[gid] = nextServer(leaderIndex, len(servers))
+		time.Sleep(TryServerTimeout)
+	}
+}
+
 func (ck *Clerk) Put(key string, value string) {
 	ck.PutAppend(key, value, "Put")
 }

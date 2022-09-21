@@ -15,6 +15,7 @@ const (
 	PutOp
 	AppendOp
 	ConfigOp
+	GetShardOp
 )
 
 const (
@@ -27,7 +28,15 @@ type Op struct {
 	Operator  int
 	RequestId int64
 	LastSuc   int64
-	Config    shardctrler.Config
+	// for GetShard and Internal UpdateConfig
+	Config shardctrler.Config
+	// for GetShard
+	Shard int
+}
+
+type IdErr struct {
+	ID  int64
+	Err Err
 }
 
 type ShardKV struct {
@@ -42,11 +51,12 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
+	clerk  *Clerk
 	config shardctrler.Config
 	dead   chan void
 	mck    *shardctrler.Clerk
 	dataCh chan void
-	data   map[string]string
+	data   [shardctrler.NShards]map[string]string
 	// each index allocate a channel to inform the waiting request
 	// map[specIndex int]committed RequestId in spec index, chan int64
 	notification sync.Map
@@ -57,9 +67,10 @@ type ShardKV struct {
 	// protected by dataCh
 	snapshotLastIndex int
 	commitIndex       int
+	finishedConfig    int
 }
 
-func (kv *ShardKV) applyCommand(index int, c Op) {
+func (kv *ShardKV) applyCommand(index int, c Op) Err {
 	//Debug(dApply, kv.gid, kv.me, "Apply Command %+v", c)
 
 	// lastSuc received by client, delete it
@@ -67,24 +78,82 @@ func (kv *ShardKV) applyCommand(index int, c Op) {
 	_, exist := kv.appliedButNotReceived[c.RequestId]
 	if exist {
 		// have applied before, then don't apply it again
-		return
+		return OK
 	}
 	kv.appliedButNotReceived[c.RequestId] = void{}
 
 	switch c.Operator {
 	case PutOp:
-		kv.data[c.Key] = c.Value
-	case AppendOp:
-		v, exist := kv.data[c.Key]
-		if exist {
-			kv.data[c.Key] = v + c.Value
-		} else {
-			kv.data[c.Key] = c.Value
+		shard := key2shard(c.Key)
+		kv.mu.Lock()
+		if kv.config.Num > kv.finishedConfig {
+			kv.mu.Unlock()
+			return ErrWrongLeader
 		}
+		specGID := kv.config.Shards[shard]
+		kv.mu.Unlock()
+		if specGID != kv.gid {
+			return ErrWrongGroup
+		}
+		kv.data[shard][c.Key] = c.Value
+	case AppendOp:
+		shard := key2shard(c.Key)
+		kv.mu.Lock()
+		if kv.config.Num > kv.finishedConfig {
+			kv.mu.Unlock()
+			return ErrWrongLeader
+		}
+		specGID := kv.config.Shards[shard]
+		kv.mu.Unlock()
+		if specGID != kv.gid {
+			return ErrWrongGroup
+		}
+		v, exist := kv.data[shard][c.Key]
+		if exist {
+			kv.data[shard][c.Key] = v + c.Value
+		} else {
+			kv.data[shard][c.Key] = c.Value
+		}
+	case GetShardOp:
+		fallthrough
 	case ConfigOp:
 		kv.mu.Lock()
+		if c.Config.Num <= kv.config.Num {
+			kv.mu.Unlock()
+			return OK
+		}
+		lastConfig := kv.config
 		kv.config = c.Config
 		kv.mu.Unlock()
+		// don't block, deadlock
+		// according to the new Config, get the shards
+		go func(lastConfig shardctrler.Config) {
+			if lastConfig.Num == 0 {
+				kv.mu.Lock()
+				kv.finishedConfig++
+				kv.mu.Unlock()
+				// shards from scratch
+				return
+			}
+
+			if lastConfig.Num != c.Config.Num-1 {
+				lastConfig = kv.mck.Query(c.Config.Num - 1)
+			}
+			Debug(dInfo, kv.gid-100, kv.me, "Get lastConfig %v", lastConfig)
+			for s := 0; s < shardctrler.NShards; s++ {
+				// need to request shard state
+				if c.Config.Shards[s] == kv.gid && lastConfig.Shards[s] != kv.gid {
+					requestGID := lastConfig.Shards[s]
+					Debug(dInfo, kv.gid-100, kv.me, "GetShard %v send to G%v", s, requestGID)
+					kv.data[s] = kv.clerk.GetShard(s, requestGID, lastConfig.Groups[requestGID], c.Config)
+					Debug(dInfo, kv.gid-100, kv.me, "Received Shard %v from G%v", s, requestGID)
+				}
+			}
+			kv.mu.Lock()
+			kv.finishedConfig++
+			kv.mu.Unlock()
+		}(lastConfig)
+
 	}
 	//if v, exist := kv.data[c.Key]; exist {
 	//	if c.Operator == GetOp {
@@ -93,6 +162,7 @@ func (kv *ShardKV) applyCommand(index int, c Op) {
 	//		Debug(dSnap, kv.gid, kv.me, "Update %v = %v, index %v", c.Key, v, index)
 	//	}
 	//}
+	return OK
 }
 
 func (kv *ShardKV) compareSnapshot() {
@@ -116,23 +186,26 @@ func (kv *ShardKV) compareSnapshot() {
 
 func (kv *ShardKV) updateConfig() {
 	for {
-		time.Sleep(ConfigurationTimeout)
 		_, isLeader := kv.rf.GetState()
 		// only the leader need to update the configuration
 		if !isLeader {
+			time.Sleep(ConfigurationTimeout)
 			continue
 		}
 
 		newConfig := kv.mck.Query(-1)
+
+		//Debug(dInfo, kv.gid-100, kv.me, "try update %v", newConfig)
 		// There are no others writing it, so we can copy once to avoid waiting lock
 		kv.mu.Lock()
 		curNum := kv.config.Num
 		kv.mu.Unlock()
 
-		if curNum == newConfig.Num {
+		if curNum >= newConfig.Num {
+			time.Sleep(ConfigurationTimeout)
 			continue
 		}
-
+		Debug(dInfo, kv.gid-100, kv.me, "Need to update %v", newConfig)
 		// isolation from client request id
 		rid := int64(-newConfig.Num)
 		// may fail, but we will continue try it
@@ -142,7 +215,7 @@ func (kv *ShardKV) updateConfig() {
 			Operator:  ConfigOp,
 			RequestId: rid,
 			LastSuc:   int64(-curNum),
-		}, func() {})
+		}, func() Err { return OK })
 	}
 }
 
@@ -155,7 +228,7 @@ func (kv *ShardKV) waiting() {
 			if msg.CommandValid {
 				<-kv.dataCh
 
-				kv.applyCommand(msg.CommandIndex, msg.Command.(Op))
+				err := kv.applyCommand(msg.CommandIndex, msg.Command.(Op))
 				kv.commitIndex = msg.CommandIndex
 
 				go func() { kv.dataCh <- void{} }()
@@ -166,14 +239,14 @@ func (kv *ShardKV) waiting() {
 				// or the server is follower, no request is waiting
 				if exist {
 					// if existed, there must be someone waiting for it
-					waitChInter.(chan int64) <- msg.Command.(Op).RequestId
+					waitChInter.(chan IdErr) <- IdErr{ID: msg.Command.(Op).RequestId, Err: err}
 				}
 			} else if msg.SnapshotValid {
 				if kv.rf.CondInstallSnapshot(msg.SnapshotTerm, msg.SnapshotIndex, msg.Snapshot) {
 					// exit all waiting request before `SnapshotIndex`
 					kv.notification.Range(func(key, value interface{}) bool {
 						if key.(int) <= msg.SnapshotIndex {
-							value.(chan int64) <- 0
+							value.(chan IdErr) <- IdErr{ID: 0, Err: OK}
 						}
 						return true
 					})
@@ -207,14 +280,14 @@ func (kv *ShardKV) readPersist(snapshot []byte) {
 	go func() { kv.dataCh <- void{} }()
 }
 
-func (kv *ShardKV) Commit(command Op, postFunc func()) (WrongLeader bool) {
+func (kv *ShardKV) Commit(command Op, postFunc func() Err) Err {
 	specId := command.RequestId
 	index, _, isLeader := kv.rf.Start(command)
 	if !isLeader {
-		return true
+		return ErrWrongLeader
 	}
 
-	waitCh := make(chan int64)
+	waitCh := make(chan IdErr)
 	kv.notification.Store(index, waitCh)
 	defer func() {
 		// delete first
@@ -238,59 +311,108 @@ func (kv *ShardKV) Commit(command Op, postFunc func()) (WrongLeader bool) {
 		opName = "PutAppend"
 	case ConfigOp:
 		opName = "Update Config"
+	case GetShardOp:
+		opName = "GetShard"
 	}
 
 	select {
 	case <-kv.dead:
 		Debug(dClean, kv.gid, kv.me, "Killed")
-	case realId := <-waitCh:
-		if realId != specId {
-			Debug(dInfo, kv.gid, kv.me, opName+" canceled spec: %v, real: %v", specId, realId)
-			return true
+	case realIdErr := <-waitCh:
+		if realIdErr.Err != OK {
+			Debug(dInfo, kv.gid-100, kv.me, opName+" wrong group %v", specId)
+			return realIdErr.Err
 		}
-		postFunc()
-		Debug(dInfo, kv.gid, kv.me, opName+" ok %v", specId)
-		return false
+		if realIdErr.ID != specId {
+			Debug(dInfo, kv.gid-100, kv.me, opName+" canceled spec: %v, real: %v", specId, realIdErr.ID)
+			return ErrWrongLeader
+		}
+		if err := postFunc(); err != OK {
+			return err
+		}
+		Debug(dInfo, kv.gid-100, kv.me, opName+" ok %v", specId)
+		return OK
 	case <-timeoutCh(waitTimeout):
-		Debug(dInfo, kv.gid, kv.me, opName+" timeout")
+		Debug(dInfo, kv.gid-100, kv.me, opName+" timeout")
 	}
-	return true
+	return ErrWrongLeader
+}
+
+func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
+	//Debug(dInfo, kv.gid-100, kv.me, "GetShard %+v", args)
+	//defer Debug(dInfo, kv.gid-100, kv.me, "GetShard reply %+v", reply)
+
+	_, isLeader := kv.rf.GetState()
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+
+	kv.mu.Lock()
+	if args.Config.Num <= kv.config.Num {
+		kv.mu.Unlock()
+		<-kv.dataCh
+		reply.Data = make(map[string]string)
+		for k, v := range kv.data[args.Shard] {
+			reply.Data[k] = v
+		}
+		go func() { kv.dataCh <- void{} }()
+		reply.Err = OK
+		return
+	}
+	kv.mu.Unlock()
+
+	reply.Err = kv.Commit(Op{
+		Shard:     args.Shard,
+		Config:    args.Config,
+		Operator:  GetShardOp,
+		RequestId: args.RequestId,
+		LastSuc:   args.LastSuc,
+	}, func() Err {
+		<-kv.dataCh
+		reply.Data = make(map[string]string)
+		for k, v := range kv.data[args.Shard] {
+			reply.Data[k] = v
+		}
+		go func() { kv.dataCh <- void{} }()
+		return OK
+	})
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
-	//Debug(dInfo, kv.gid, kv.me, "Get %+v", args)
-	//defer Debug(dInfo, kv.gid, kv.me, "Get reply %+v", reply)
-	shard := key2shard(args.Key)
-	kv.mu.Lock()
-	specGID := kv.config.Shards[shard]
-	kv.mu.Unlock()
-	if specGID != kv.gid {
-		reply.Err = ErrWrongGroup
-		return
-	}
-	if kv.Commit(Op{
+	//Debug(dInfo, kv.gid-100, kv.me, "Get %+v", args)
+	//defer Debug(dInfo, kv.gid-100, kv.me, "Get reply %+v", reply)
+	reply.Err = kv.Commit(Op{
 		Key:       args.Key,
 		Operator:  GetOp,
 		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,
-	}, func() {
+	}, func() Err {
+		shard := key2shard(args.Key)
+		kv.mu.Lock()
+		if kv.config.Num > kv.finishedConfig {
+			kv.mu.Unlock()
+			return ErrWrongLeader
+		}
+		specGID := kv.config.Shards[shard]
+		kv.mu.Unlock()
+		if specGID != kv.gid {
+			return ErrWrongGroup
+		}
 		<-kv.dataCh
-		v, exist := kv.data[args.Key]
+		v, exist := kv.data[shard][args.Key]
 		go func() { kv.dataCh <- void{} }()
 		if !exist {
-			reply.Err = ErrNoKey
-			return
+			return ErrNoKey
 		}
-		reply.Err = OK
 		reply.Value = v
-	}) {
-		reply.Err = ErrWrongLeader
-	}
+		return OK
+	})
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	//Debug(dInfo, kv.gid, kv.me, "PutAppend %+v", args)
-	//defer Debug(dInfo, kv.gid, kv.me, "PutAppend reply %+v", reply)
+	//Debug(dInfo, kv.gid-100, kv.me, "PutAppend %+v", args)
+	//defer Debug(dInfo, kv.gid-100, kv.me, "PutAppend reply %+v", reply)
 	shard := key2shard(args.Key)
 	kv.mu.Lock()
 	specGID := kv.config.Shards[shard]
@@ -311,17 +433,13 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 		return
 	}
 
-	if kv.Commit(Op{
+	reply.Err = kv.Commit(Op{
 		Key:       args.Key,
 		Value:     args.Value,
 		Operator:  Operator,
 		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,
-	}, func() {}) {
-		reply.Err = ErrWrongLeader
-		return
-	}
-	reply.Err = OK
+	}, func() Err { return OK })
 }
 
 func (kv *ShardKV) cleaner() {
@@ -378,11 +496,14 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	// Your initialization code here.
 	kv.mck = shardctrler.MakeClerk(kv.ctrlers)
+	kv.clerk = MakeClerk(ctrlers, make_end)
 
 	kv.appliedButNotReceived = make(map[int64]void)
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.dataCh = make(chan void)
-	kv.data = make(map[string]string)
+	for s := range kv.data {
+		kv.data[s] = make(map[string]string)
+	}
 	kv.persister = persister
 	kv.rf = raft.Make(servers, me, persister, kv.applyCh)
 	kv.dead = make(chan void)
@@ -393,7 +514,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	kv.readPersist(kv.persister.ReadSnapshot())
 
-	Debug(dInfo, kv.gid, kv.me, "Restarted with lastIndex %v", kv.snapshotLastIndex)
+	Debug(dInfo, kv.gid-100, kv.me, "Restarted with lastIndex %v", kv.snapshotLastIndex)
 
 	go kv.waiting()
 	go kv.compareSnapshot()
