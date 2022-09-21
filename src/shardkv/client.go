@@ -15,8 +15,8 @@ import "6.824/shardctrler"
 import "time"
 
 const (
-	TryServerTimeout     = 100 * time.Millisecond
-	ConfigurationTimeout = 100 * time.Millisecond
+	TryServerTimeout = 100 * time.Millisecond
+	TryGroupTimeout  = 100 * time.Millisecond
 )
 
 // which shard is a key in?
@@ -104,7 +104,7 @@ func (ck *Clerk) Get(key string) string {
 				}
 			}
 		}
-		time.Sleep(ConfigurationTimeout)
+		time.Sleep(TryGroupTimeout)
 		// ask controler for the latest configuration.
 		ck.config = ck.sm.Query(-1)
 	}
@@ -146,13 +146,13 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 				}
 			}
 		}
-		time.Sleep(ConfigurationTimeout)
+		time.Sleep(TryGroupTimeout)
 		// ask controler for the latest configuration.
 		ck.config = ck.sm.Query(-1)
 	}
 }
 
-func (ck *Clerk) GetShard(shard, gid int, servers []string, config shardctrler.Config) map[string]string {
+func (ck *Clerk) GetShard(shard, gid, configNum int, servers []string) (map[string]string, Err) {
 	rid := nrand()
 	for {
 		leaderIndex, exist := ck.leader[gid]
@@ -163,12 +163,12 @@ func (ck *Clerk) GetShard(shard, gid int, servers []string, config shardctrler.C
 		reply := &GetShardReply{}
 		if ck.make_end(servers[leaderIndex]).Call("ShardKV.GetShard", &GetShardArgs{
 			Shard:     shard,
-			Config:    config,
+			ConfigNum: configNum,
 			RequestId: rid,
 			LastSuc:   ck.lastSuc,
 		}, &reply) {
-			if reply.Err == OK {
-				return reply.Data
+			if reply.Err != ErrWrongLeader {
+				return reply.Data, reply.Err
 			}
 		}
 		ck.leader[gid] = nextServer(leaderIndex, len(servers))
