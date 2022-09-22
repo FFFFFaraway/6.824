@@ -70,11 +70,15 @@ func (kv *ShardKV) fetchShard() {
 }
 
 func (kv *ShardKV) applyCommand(index int, c Op) Err {
-	//Debug(dApply, kv.gid-100, kv.me, "Apply Command %+v", c)
 	<-kv.configCh
 	defer func() { go func() { kv.configCh <- void{} }() }()
 	<-kv.dataCh
 	defer func() { go func() { kv.dataCh <- void{} }() }()
+
+	_, leader := kv.rf.GetState()
+	if leader {
+		//Debug(dApply, kv.gid-100, kv.me, "Apply Command %+v", c)
+	}
 
 	// lastSuc received by client, delete it
 	delete(kv.appliedButNotReceived, c.LastSuc)
@@ -84,13 +88,11 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 		return OK
 	}
 
-	_, leader := kv.rf.GetState()
-
 	switch c.Operator {
 	case GetOp:
 		shard := key2shard(c.Key)
 		if leader {
-			Debug(dSnap, kv.gid, kv.me, "Get %v = %v, index %v", c.Key, kv.data[shard][kv.config.Num], index)
+			Debug(dSnap, kv.gid, kv.me, "Get %v = %v, index %v", c.Key, kv.data[shard][kv.config.Num][c.Key], index)
 		}
 	case PutOp:
 		shard := key2shard(c.Key)
@@ -106,7 +108,7 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 		}
 		m[c.Key] = c.Value
 		if leader {
-			Debug(dSnap, kv.gid, kv.me, "Update %v = %v, index %v", c.Key, m, index)
+			Debug(dSnap, kv.gid, kv.me, "Update %v = %v, index %v", c.Key, c.Value, index)
 		}
 	case AppendOp:
 		shard := key2shard(c.Key)
@@ -128,7 +130,7 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 			m[c.Key] = c.Value
 		}
 		if leader {
-			Debug(dSnap, kv.gid, kv.me, "Update %v = %v, index %v", c.Key, m, index)
+			Debug(dSnap, kv.gid, kv.me, "Update %v = %v, index %v", c.Key, m[c.Key], index)
 		}
 	case GetShardOp:
 		// When a GetShard committed, must do not operate this shard anymore
@@ -137,23 +139,23 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 			kv.config.Shards[c.Shard] = -1
 		}
 		if leader {
-			Debug(dSnap, kv.gid, kv.me, "GetShardOp config.Shards: %v", kv.config.Shards)
+			Debug(dSnap, kv.gid, kv.me, "GetShardOp config.Shards: %v, index %v", kv.config.Shards, index)
 		}
 	case ConfigOp:
 		if c.Config.Num > kv.config.Num {
 			kv.config = c.Config
 			if leader {
-				Debug(dSnap, kv.gid, kv.me, "Update config %v", kv.config)
+				Debug(dSnap, kv.gid, kv.me, "Update config %v, index %v", kv.config, index)
 			}
 		} else {
 			if leader {
-				Debug(dSnap, kv.gid, kv.me, "Update config failed, args: %v, hold: %v", c.Config, kv.config)
+				Debug(dSnap, kv.gid, kv.me, "Update config failed, args: %v, hold: %v, index %v", c.Config, kv.config, index)
 			}
 		}
 	case UpdateDataOp:
 		kv.data[c.Shard][c.ConfigNum] = mapCopy(c.Data)
 		if leader {
-			Debug(dSnap, kv.gid, kv.me, "UpdateData s: %v, c: %v, data: %v, %v", c.Shard, c.ConfigNum, c.Data, c.RequestId)
+			Debug(dSnap, kv.gid, kv.me, "UpdateData s: %v, c: %v, data: %v, %v, index %v", c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
 		}
 	}
 	kv.commitIndex = index

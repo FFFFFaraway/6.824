@@ -93,6 +93,7 @@ func (ck *Clerk) Get(key string) string {
 						LastSuc:   ck.lastSuc,
 					}, &reply) {
 						if reply.Err == OK || reply.Err == ErrNoKey {
+							ck.lastSuc = rid
 							return reply.Value
 						}
 						if reply.Err == ErrWrongGroup {
@@ -135,6 +136,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 						LastSuc:   ck.lastSuc,
 					}, &reply) {
 						if reply.Err == OK {
+							ck.lastSuc = rid
 							return
 						}
 						if reply.Err == ErrWrongGroup {
@@ -168,6 +170,7 @@ func (ck *Clerk) GetShard(shard, gid, configNum int, servers []string) (map[stri
 			LastSuc:   ck.lastSuc,
 		}, &reply) {
 			if reply.Err != ErrWrongLeader {
+				ck.lastSuc = rid
 				return reply.Data, reply.Err
 			}
 		}
@@ -193,6 +196,7 @@ func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data ma
 			LastSuc:   ck.lastSuc,
 		}, &reply) {
 			if reply.Err != ErrWrongLeader {
+				ck.lastSuc = rid
 				return
 			}
 		}
@@ -216,6 +220,7 @@ func (ck *Clerk) UpdateConfig(gid int, config shardctrler.Config, servers []stri
 			LastSuc:   ck.lastSuc,
 		}, &reply) {
 			if reply.Err != ErrWrongLeader {
+				ck.lastSuc = rid
 				return
 			}
 		}
