@@ -29,6 +29,7 @@ func (kv *ShardKV) persist(index int) {
 	w := new(bytes.Buffer)
 	e := labgob.NewEncoder(w)
 	e.Encode(index)
+	e.Encode(&kv.config)
 	e.Encode(kv.data)
 	e.Encode(kv.appliedButNotReceived)
 	kv.rf.Snapshot(index, w.Bytes())
@@ -42,6 +43,7 @@ func (kv *ShardKV) readPersist(snapshot []byte) {
 	d := labgob.NewDecoder(r)
 	<-kv.dataCh
 	d.Decode(&kv.snapshotLastIndex)
+	d.Decode(&kv.config)
 	d.Decode(&kv.data)
 	d.Decode(&kv.appliedButNotReceived)
 	kv.commitIndex = kv.snapshotLastIndex
