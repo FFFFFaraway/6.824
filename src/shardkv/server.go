@@ -159,7 +159,12 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		LastSuc:   args.LastSuc,
 	}, func() Err {
 		// when finished, this configNum must have state (by this commit, or updateConfig commit)
-		reply.Data = kv.data[args.Shard][args.ConfigNum]
+		// if not, try again
+		data, exist := kv.data[args.Shard][args.ConfigNum]
+		if !exist {
+			return ErrWrongLeader
+		}
+		reply.Data = data
 		return OK
 	})
 }
