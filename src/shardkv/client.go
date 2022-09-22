@@ -201,6 +201,29 @@ func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data ma
 	}
 }
 
+func (ck *Clerk) UpdateConfig(gid int, config shardctrler.Config, servers []string) {
+	rid := nrand()
+	for {
+		leaderIndex, exist := ck.leader[gid]
+		if !exist || leaderIndex >= len(servers) {
+			ck.leader[gid] = 0
+			leaderIndex = 0
+		}
+		reply := &UpdateConfigReply{}
+		if ck.make_end(servers[leaderIndex]).Call("ShardKV.UpdateConfig", &UpdateConfigArgs{
+			Config:    config,
+			RequestId: rid,
+			LastSuc:   ck.lastSuc,
+		}, &reply) {
+			if reply.Err != ErrWrongLeader {
+				return
+			}
+		}
+		ck.leader[gid] = nextServer(leaderIndex, len(servers))
+		time.Sleep(TryServerTimeout)
+	}
+}
+
 func (ck *Clerk) Put(key string, value string) {
 	ck.PutAppend(key, value, "Put")
 }

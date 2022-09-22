@@ -87,28 +87,38 @@ func (kv *ShardKV) updateConfig() {
 		//Debug(dInfo, kv.gid-100, kv.me, "try update %v", newConfig)
 		// There are no others writing it, so we can copy once to avoid waiting lock
 		<-kv.configCh
-		curNum := kv.config.Num
+		config := kv.config
 		go func() { kv.configCh <- void{} }()
 
-		if curNum >= newConfig.Num {
+		if config.Num >= newConfig.Num {
 			time.Sleep(ConfigurationTimeout)
 			continue
 		}
 		Debug(dInfo, kv.gid-100, kv.me, "Need to update %v", newConfig)
-		// isolation from client request id
-		rid := int64(-newConfig.Num)
-		// may fail, but we will continue try it
-		// do not update here, must update through the applyCh
-		kv.Commit(Op{
-			Config:    newConfig,
-			Operator:  ConfigOp,
-			RequestId: rid,
-			LastSuc:   int64(-curNum),
-		}, func() Err {
-			kv.fetchShard()
-			return OK
-		})
+
+		if servers, exist := newConfig.Groups[kv.gid]; exist {
+			kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
+		} else {
+			time.Sleep(ConfigurationTimeout)
+		}
 	}
+}
+
+func (kv *ShardKV) UpdateConfig(args *UpdateConfigArgs, reply *UpdateConfigReply) {
+	_, isLeader := kv.rf.GetState()
+	if !isLeader {
+		reply.Err = ErrWrongLeader
+		return
+	}
+	reply.Err = kv.Commit(Op{
+		Config:    args.Config,
+		Operator:  ConfigOp,
+		RequestId: args.RequestId,
+		LastSuc:   args.LastSuc,
+	}, func() Err {
+		kv.fetchShard()
+		return OK
+	})
 }
 
 func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {

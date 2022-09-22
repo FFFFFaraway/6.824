@@ -1,5 +1,7 @@
 package shardkv
 
+import "6.824/shardctrler"
+
 //
 // Sharded key/value server.
 // Lots of replica groups, each running Raft.
@@ -66,5 +68,15 @@ type UpdateDataArgs struct {
 }
 
 type UpdateDataReply struct {
+	Err Err
+}
+
+type UpdateConfigArgs struct {
+	Config    shardctrler.Config
+	RequestId int64
+	LastSuc   int64
+}
+
+type UpdateConfigReply struct {
 	Err Err
 }
