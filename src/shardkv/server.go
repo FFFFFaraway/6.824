@@ -139,7 +139,9 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 	}
 	if kv.config.Num > args.ConfigNum {
 		go func() { kv.configCh <- void{} }()
+		<-kv.dataCh
 		data, exist := kv.data[args.Shard][args.ConfigNum]
+		go func() { kv.dataCh <- void{} }()
 		if exist {
 			reply.Data = data
 			reply.Err = OK

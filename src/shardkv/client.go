@@ -8,7 +8,10 @@ package shardkv
 // talks to the group that holds the key's shard.
 //
 
-import "6.824/labrpc"
+import (
+	"6.824/labrpc"
+	"sync"
+)
 import "crypto/rand"
 import "math/big"
 import "6.824/shardctrler"
@@ -42,9 +45,9 @@ type Clerk struct {
 	sm       *shardctrler.Clerk
 	config   shardctrler.Config
 	make_end func(string) *labrpc.ClientEnd
-	// You will have to modify this struct.
-	leader  map[int]int   // gid -> last leader index
-	lastSuc map[int]int64 // gid -> lastSuc
+
+	leader  sync.Map // gid -> last leader index
+	lastSuc sync.Map // gid -> lastSuc
 }
 
 func nextServer(server, groupSize int) int {
@@ -64,8 +67,6 @@ func MakeClerk(ctrlers []*labrpc.ClientEnd, make_end func(string) *labrpc.Client
 	ck.sm = shardctrler.MakeClerk(ctrlers)
 	ck.make_end = make_end
 	// You'll have to add code here.
-	ck.leader = make(map[int]int)
-	ck.lastSuc = make(map[int]int64)
 	return ck
 }
 
@@ -82,15 +83,20 @@ func (ck *Clerk) Get(key string) string {
 		if gid != 0 {
 			if servers, ok := ck.config.Groups[gid]; ok {
 				for {
-					leaderIndex, exist := ck.leader[gid]
+					leaderIndex := 0
+					inter, exist := ck.leader.Load(gid)
 					if !exist || leaderIndex >= len(servers) {
-						ck.leader[gid] = 0
-						leaderIndex = 0
+						ck.leader.Store(gid, 0)
+					} else {
+						leaderIndex = inter.(int)
 					}
-					lastSuc := ck.lastSuc[gid]
+
+					lastSuc := int64(0)
+					inter, exist = ck.lastSuc.Load(gid)
 					if !exist {
-						ck.lastSuc[gid] = 0
-						lastSuc = 0
+						ck.lastSuc.Store(gid, int64(0))
+					} else {
+						lastSuc = inter.(int64)
 					}
 					reply := &GetReply{}
 					if ck.make_end(servers[leaderIndex]).Call("ShardKV.Get", &GetArgs{
@@ -99,14 +105,14 @@ func (ck *Clerk) Get(key string) string {
 						LastSuc:   lastSuc,
 					}, &reply) {
 						if reply.Err == OK || reply.Err == ErrNoKey {
-							ck.lastSuc[gid] = rid
+							ck.lastSuc.Store(gid, rid)
 							return reply.Value
 						}
 						if reply.Err == ErrWrongGroup {
 							break
 						}
 					}
-					ck.leader[gid] = nextServer(leaderIndex, len(servers))
+					ck.leader.Store(gid, nextServer(leaderIndex, len(servers)))
 					time.Sleep(TryServerTimeout)
 				}
 			}
@@ -128,15 +134,20 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 		if gid != 0 {
 			if servers, ok := ck.config.Groups[gid]; ok {
 				for {
-					leaderIndex, exist := ck.leader[gid]
+					leaderIndex := 0
+					inter, exist := ck.leader.Load(gid)
 					if !exist || leaderIndex >= len(servers) {
-						ck.leader[gid] = 0
-						leaderIndex = 0
+						ck.leader.Store(gid, 0)
+					} else {
+						leaderIndex = inter.(int)
 					}
-					lastSuc := ck.lastSuc[gid]
+
+					lastSuc := int64(0)
+					inter, exist = ck.lastSuc.Load(gid)
 					if !exist {
-						ck.lastSuc[gid] = 0
-						lastSuc = 0
+						ck.lastSuc.Store(gid, int64(0))
+					} else {
+						lastSuc = inter.(int64)
 					}
 					reply := &PutAppendReply{}
 					if ck.make_end(servers[leaderIndex]).Call("ShardKV.PutAppend", &PutAppendArgs{
@@ -147,14 +158,14 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 						LastSuc:   lastSuc,
 					}, &reply) {
 						if reply.Err == OK {
-							ck.lastSuc[gid] = rid
+							ck.lastSuc.Store(gid, rid)
 							return
 						}
 						if reply.Err == ErrWrongGroup {
 							break
 						}
 					}
-					ck.leader[gid] = nextServer(leaderIndex, len(servers))
+					ck.leader.Store(gid, nextServer(leaderIndex, len(servers)))
 					time.Sleep(TryServerTimeout)
 				}
 			}
@@ -168,15 +179,20 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 func (ck *Clerk) GetShard(shard, gid, configNum int, servers []string) (map[string]string, Err) {
 	rid := nrand()
 	for {
-		leaderIndex, exist := ck.leader[gid]
+		leaderIndex := 0
+		inter, exist := ck.leader.Load(gid)
 		if !exist || leaderIndex >= len(servers) {
-			ck.leader[gid] = 0
-			leaderIndex = 0
+			ck.leader.Store(gid, 0)
+		} else {
+			leaderIndex = inter.(int)
 		}
-		lastSuc := ck.lastSuc[gid]
+
+		lastSuc := int64(0)
+		inter, exist = ck.lastSuc.Load(gid)
 		if !exist {
-			ck.lastSuc[gid] = 0
-			lastSuc = 0
+			ck.lastSuc.Store(gid, int64(0))
+		} else {
+			lastSuc = inter.(int64)
 		}
 		reply := &GetShardReply{}
 		if ck.make_end(servers[leaderIndex]).Call("ShardKV.GetShard", &GetShardArgs{
@@ -186,11 +202,11 @@ func (ck *Clerk) GetShard(shard, gid, configNum int, servers []string) (map[stri
 			LastSuc:   lastSuc,
 		}, &reply) {
 			if reply.Err != ErrWrongLeader {
-				ck.lastSuc[gid] = rid
+				ck.lastSuc.Store(gid, rid)
 				return reply.Data, reply.Err
 			}
 		}
-		ck.leader[gid] = nextServer(leaderIndex, len(servers))
+		ck.leader.Store(gid, nextServer(leaderIndex, len(servers)))
 		time.Sleep(TryServerTimeout)
 	}
 }
@@ -198,15 +214,20 @@ func (ck *Clerk) GetShard(shard, gid, configNum int, servers []string) (map[stri
 func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data map[string]string) {
 	rid := nrand()
 	for {
-		leaderIndex, exist := ck.leader[gid]
+		leaderIndex := 0
+		inter, exist := ck.leader.Load(gid)
 		if !exist || leaderIndex >= len(servers) {
-			ck.leader[gid] = 0
-			leaderIndex = 0
+			ck.leader.Store(gid, 0)
+		} else {
+			leaderIndex = inter.(int)
 		}
-		lastSuc := ck.lastSuc[gid]
+
+		lastSuc := int64(0)
+		inter, exist = ck.lastSuc.Load(gid)
 		if !exist {
-			ck.lastSuc[gid] = 0
-			lastSuc = 0
+			ck.lastSuc.Store(gid, int64(0))
+		} else {
+			lastSuc = inter.(int64)
 		}
 		reply := &UpdateDataReply{}
 		if ck.make_end(servers[leaderIndex]).Call("ShardKV.UpdateData", &UpdateDataArgs{
@@ -217,11 +238,11 @@ func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data ma
 			LastSuc:   lastSuc,
 		}, &reply) {
 			if reply.Err != ErrWrongLeader {
-				ck.lastSuc[gid] = rid
+				ck.lastSuc.Store(gid, rid)
 				return
 			}
 		}
-		ck.leader[gid] = nextServer(leaderIndex, len(servers))
+		ck.leader.Store(gid, nextServer(leaderIndex, len(servers)))
 		time.Sleep(TryServerTimeout)
 	}
 }
@@ -229,15 +250,20 @@ func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data ma
 func (ck *Clerk) UpdateConfig(gid int, config shardctrler.Config, servers []string) {
 	rid := nrand()
 	for {
-		leaderIndex, exist := ck.leader[gid]
+		leaderIndex := 0
+		inter, exist := ck.leader.Load(gid)
 		if !exist || leaderIndex >= len(servers) {
-			ck.leader[gid] = 0
-			leaderIndex = 0
+			ck.leader.Store(gid, 0)
+		} else {
+			leaderIndex = inter.(int)
 		}
-		lastSuc := ck.lastSuc[gid]
+
+		lastSuc := int64(0)
+		inter, exist = ck.lastSuc.Load(gid)
 		if !exist {
-			ck.lastSuc[gid] = 0
-			lastSuc = 0
+			ck.lastSuc.Store(gid, int64(0))
+		} else {
+			lastSuc = inter.(int64)
 		}
 		reply := &UpdateConfigReply{}
 		if ck.make_end(servers[leaderIndex]).Call("ShardKV.UpdateConfig", &UpdateConfigArgs{
@@ -246,11 +272,11 @@ func (ck *Clerk) UpdateConfig(gid int, config shardctrler.Config, servers []stri
 			LastSuc:   lastSuc,
 		}, &reply) {
 			if reply.Err != ErrWrongLeader {
-				ck.lastSuc[gid] = rid
+				ck.lastSuc.Store(gid, rid)
 				return
 			}
 		}
-		ck.leader[gid] = nextServer(leaderIndex, len(servers))
+		ck.leader.Store(gid, nextServer(leaderIndex, len(servers)))
 		time.Sleep(TryServerTimeout)
 	}
 }

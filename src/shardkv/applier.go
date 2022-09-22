@@ -13,7 +13,13 @@ func (kv *ShardKV) fetchShard() {
 	go func() { kv.configCh <- void{} }()
 
 	<-kv.dataCh
-	data := kv.data
+	var data [shardctrler.NShards]map[int]map[string]string
+	for s := range kv.data {
+		data[s] = make(map[int]map[string]string)
+		for j := range kv.data[s] {
+			data[s][j] = mapCopy(kv.data[s][j])
+		}
+	}
 	go func() { kv.dataCh <- void{} }()
 
 	responsibleShards := make([]int, 0)
