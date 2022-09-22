@@ -57,11 +57,11 @@ func init() {
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 }
 
-func Debug(topic logTopic, gid, who int, format string, a ...interface{}) {
+func Debug(topic logTopic, gid int, format string, a ...interface{}) {
 	if debugVerbosity == -2 {
 		t := time.Since(debugStart).Microseconds()
 		t /= 100
-		prefix := fmt.Sprintf("%06d %v G%v S%v ", t, string(topic), gid, who)
+		prefix := fmt.Sprintf("%06d %v G%v ", t, string(topic), gid)
 		format = prefix + format
 		log.Printf(format, a...)
 	}

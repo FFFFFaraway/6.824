@@ -84,7 +84,7 @@ func (kv *ShardKV) updateConfig() {
 		newConfig := kv.mck.Query(-1)
 		go func() { kv.mckCh <- void{} }()
 
-		//Debug(dInfo, kv.gid-100, kv.me, "try update %v", newConfig)
+		//Debug(dInfo, kv.gid-100, "try update %v", newConfig)
 		// There are no others writing it, so we can copy once to avoid waiting lock
 		<-kv.configCh
 		config := kv.config
@@ -94,9 +94,9 @@ func (kv *ShardKV) updateConfig() {
 			time.Sleep(ConfigurationTimeout)
 			continue
 		}
-		Debug(dInfo, kv.gid-100, kv.me, "Need to update %v", newConfig)
 
 		if servers, exist := newConfig.Groups[kv.gid]; exist {
+			Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
 			kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
 		} else {
 			time.Sleep(ConfigurationTimeout)
@@ -122,8 +122,8 @@ func (kv *ShardKV) UpdateConfig(args *UpdateConfigArgs, reply *UpdateConfigReply
 }
 
 func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
-	//Debug(dInfo, kv.gid-100, kv.me, "GetShard %+v", args)
-	//defer Debug(dInfo, kv.gid-100, kv.me, "GetShard reply %+v", reply)
+	//Debug(dInfo, kv.gid-100, "GetShard %+v", args)
+	//defer Debug(dInfo, kv.gid-100, "GetShard reply %+v", reply)
 
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
@@ -165,8 +165,8 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 }
 
 func (kv *ShardKV) UpdateData(args *UpdateDataArgs, reply *UpdateDataReply) {
-	//Debug(dInfo, kv.gid-100, kv.me, "GetShard %+v", args)
-	//defer Debug(dInfo, kv.gid-100, kv.me, "GetShard reply %+v", reply)
+	//Debug(dInfo, kv.gid-100, "GetShard %+v", args)
+	//defer Debug(dInfo, kv.gid-100, "GetShard reply %+v", reply)
 	_, isLeader := kv.rf.GetState()
 	if !isLeader {
 		reply.Err = ErrWrongLeader
@@ -185,8 +185,8 @@ func (kv *ShardKV) UpdateData(args *UpdateDataArgs, reply *UpdateDataReply) {
 }
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
-	//Debug(dInfo, kv.gid-100, kv.me, "Get %+v", args)
-	//defer Debug(dInfo, kv.gid-100, kv.me, "Get reply %+v", reply)
+	//Debug(dInfo, kv.gid-100, "Get %+v", args)
+	//defer Debug(dInfo, kv.gid-100, "Get reply %+v", reply)
 	reply.Err = kv.Commit(Op{
 		Key:       args.Key,
 		Operator:  GetOp,
@@ -220,8 +220,8 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 }
 
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
-	//Debug(dInfo, kv.gid-100, kv.me, "PutAppend %+v", args)
-	//defer Debug(dInfo, kv.gid-100, kv.me, "PutAppend reply %+v", reply)
+	//Debug(dInfo, kv.gid-100, "PutAppend %+v", args)
+	//defer Debug(dInfo, kv.gid-100, "PutAppend reply %+v", reply)
 	shard := key2shard(args.Key)
 	<-kv.configCh
 	specGID := kv.config.Shards[shard]
@@ -238,7 +238,7 @@ func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	case "Append":
 		Operator = AppendOp
 	default:
-		Debug(dError, kv.gid, kv.me, "ERROR PutAppend unknown op: %v", args.Op)
+		Debug(dError, kv.gid-100, "ERROR PutAppend unknown op: %v", args.Op)
 		return
 	}
 
@@ -282,6 +282,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	// call labgob.Register on structures you want
 	// Go's RPC library to marshall/unmarshall.
 	labgob.Register(Op{})
+	labgob.Register(shardctrler.Config{})
 
 	kv := new(ShardKV)
 	kv.me = me
@@ -314,8 +315,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 
 	kv.readPersist(kv.persister.ReadSnapshot())
 
-	Debug(dInfo, kv.gid-100, kv.me, "Restarted with lastIndex %v", kv.snapshotLastIndex)
-	Debug(dInfo, kv.gid-100, kv.me, "Restarted with data %v", kv.data)
+	Debug(dInfo, kv.gid-100, "Restarted with lastIndex %v", kv.snapshotLastIndex)
+	//Debug(dInfo, kv.gid-100, "Restarted with data %v", kv.data)
+	//Debug(dInfo, kv.gid-100, "Restarted with appliedButNotReceived %v", kv.appliedButNotReceived)
 
 	go kv.waiting()
 	go kv.compareSnapshot()

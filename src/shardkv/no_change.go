@@ -58,7 +58,7 @@ func (kv *ShardKV) Commit(command Op, postFunc func() Err) Err {
 		// need to wait again
 		select {
 		case id := <-waitCh:
-			Debug(dClean, kv.gid, kv.me, "delete index %v with request id %v", index, id)
+			Debug(dClean, kv.gid-100, "delete index %v with request id %v", index, id)
 		default:
 		}
 	}()
@@ -81,23 +81,23 @@ func (kv *ShardKV) Commit(command Op, postFunc func() Err) Err {
 
 	select {
 	case <-kv.dead:
-		Debug(dClean, kv.gid, kv.me, "Killed")
+		Debug(dClean, kv.gid-100, "Killed")
 	case realIdErr := <-waitCh:
 		if realIdErr.Err != OK {
-			Debug(dInfo, kv.gid-100, kv.me, opName+" wrong group %v", specId)
+			Debug(dInfo, kv.gid-100, opName+" wrong group %v", specId)
 			return realIdErr.Err
 		}
 		if realIdErr.ID != specId {
-			Debug(dInfo, kv.gid-100, kv.me, opName+" canceled spec: %v, real: %v", specId, realIdErr.ID)
+			Debug(dInfo, kv.gid-100, opName+" canceled spec: %v, real: %v", specId, realIdErr.ID)
 			return ErrWrongLeader
 		}
 		if err := postFunc(); err != OK {
 			return err
 		}
-		Debug(dInfo, kv.gid-100, kv.me, opName+" ok %v", specId)
+		Debug(dInfo, kv.gid-100, opName+" ok %v", specId)
 		return OK
 	case <-timeoutCh(RequestWaitTimeout):
-		Debug(dInfo, kv.gid-100, kv.me, opName+" timeout")
+		Debug(dInfo, kv.gid-100, opName+" timeout")
 	}
 	return ErrWrongLeader
 }

@@ -16,9 +16,9 @@ func (kv *ShardKV) compareSnapshot() {
 			if kv.maxraftstate != -1 &&
 				kv.commitIndex > kv.snapshotLastIndex &&
 				kv.persister.RaftStateSize() > 7*kv.maxraftstate {
-				Debug(dSnap, kv.gid, kv.me, "Snapshot before %v", kv.commitIndex)
+				Debug(dSnap, kv.gid-100, "Snapshot before %v", kv.commitIndex)
 				kv.persist(kv.commitIndex)
-				Debug(dSnap, kv.gid, kv.me, "Done Snapshot before %v", kv.commitIndex)
+				Debug(dSnap, kv.gid-100, "Done Snapshot before %v", kv.commitIndex)
 			}
 			go func() { kv.dataCh <- void{} }()
 		}
