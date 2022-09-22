@@ -56,3 +56,15 @@ type GetShardReply struct {
 	Err  Err
 	Data map[string]string
 }
+
+type UpdateDataArgs struct {
+	Shard     int
+	ConfigNum int
+	Data      map[string]string
+	RequestId int64
+	LastSuc   int64
+}
+
+type UpdateDataReply struct {
+	Err Err
+}

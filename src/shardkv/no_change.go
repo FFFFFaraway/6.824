@@ -41,3 +41,71 @@ func timeoutCh(t time.Duration) (done chan void) {
 	}()
 	return
 }
+
+func (kv *ShardKV) Commit(command Op, postFunc func() Err) Err {
+	specId := command.RequestId
+	index, _, isLeader := kv.rf.Start(command)
+	if !isLeader {
+		return ErrWrongLeader
+	}
+
+	waitCh := make(chan IdErr)
+	kv.notification.Store(index, waitCh)
+	defer func() {
+		// delete first
+		kv.notification.Delete(index)
+		// it's possible that the notification has been loaded, but haven't sent signal yet
+		// need to wait again
+		select {
+		case id := <-waitCh:
+			Debug(dClean, kv.gid, kv.me, "delete index %v with request id %v", index, id)
+		default:
+		}
+	}()
+
+	var opName string
+	switch command.Operator {
+	case GetOp:
+		opName = "Get"
+	case PutOp:
+		fallthrough
+	case AppendOp:
+		opName = "PutAppend"
+	case ConfigOp:
+		opName = "Update Config"
+	case GetShardOp:
+		opName = "GetShard"
+	case UpdateDataOp:
+		opName = "UpdateDataOp"
+	}
+
+	select {
+	case <-kv.dead:
+		Debug(dClean, kv.gid, kv.me, "Killed")
+	case realIdErr := <-waitCh:
+		if realIdErr.Err != OK {
+			Debug(dInfo, kv.gid-100, kv.me, opName+" wrong group %v", specId)
+			return realIdErr.Err
+		}
+		if realIdErr.ID != specId {
+			Debug(dInfo, kv.gid-100, kv.me, opName+" canceled spec: %v, real: %v", specId, realIdErr.ID)
+			return ErrWrongLeader
+		}
+		if err := postFunc(); err != OK {
+			return err
+		}
+		Debug(dInfo, kv.gid-100, kv.me, opName+" ok %v", specId)
+		return OK
+	case <-timeoutCh(RequestWaitTimeout):
+		Debug(dInfo, kv.gid-100, kv.me, opName+" timeout")
+	}
+	return ErrWrongLeader
+}
+
+func mapCopy[K string, V string](m map[K]V) (res map[K]V) {
+	res = make(map[K]V)
+	for k, v := range m {
+		res[k] = v
+	}
+	return
+}
