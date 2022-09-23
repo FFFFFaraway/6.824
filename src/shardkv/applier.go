@@ -105,6 +105,8 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 		return OK
 	}
 
+	kv.commitIndex = index
+
 	switch c.Operator {
 	case GetOp:
 		shard := key2shard(c.Key)
@@ -184,8 +186,6 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 			}
 		}
 	}
-	kv.commitIndex = index
-
 	// only applied when OK
 	kv.appliedButNotReceived[shardDup][c.RequestId] = void{}
 
