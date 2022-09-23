@@ -161,9 +161,15 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 			}
 		}
 	case UpdateDataOp:
-		kv.data[c.Shard][c.ConfigNum] = mapCopy(c.Data)
-		if leader {
-			Debug(dSnap, kv.gid-100, "UpdateData s: %v, c: %v, data: %v, %v, index %v", c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
+		if _, exist := kv.data[c.Shard][c.ConfigNum]; exist {
+			if leader {
+				Debug(dSnap, kv.gid-100, "UpdateData failed s: %v, c: %v, data: %v, %v, index %v", c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
+			}
+		} else {
+			kv.data[c.Shard][c.ConfigNum] = mapCopy(c.Data)
+			if leader {
+				Debug(dSnap, kv.gid-100, "UpdateData s: %v, c: %v, data: %v, %v, index %v", c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
+			}
 		}
 	}
 	kv.commitIndex = index
