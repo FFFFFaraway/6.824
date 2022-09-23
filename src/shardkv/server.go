@@ -132,30 +132,6 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		return
 	}
 
-	<-kv.configCh
-	if kv.config.Num < args.ConfigNum {
-		go func() { kv.configCh <- void{} }()
-		reply.Err = ErrNoResponsibility
-		return
-	}
-	if kv.config.Num > args.ConfigNum {
-		go func() { kv.configCh <- void{} }()
-		<-kv.dataCh
-		data, exist := kv.data[args.Shard][args.ConfigNum]
-		dup := mapCopy(kv.appliedButNotReceived[args.Shard])
-		go func() { kv.dataCh <- void{} }()
-		if exist {
-			reply.Data = data
-			reply.Dup = dup
-			reply.Err = OK
-			return
-		}
-		reply.Err = ErrNoResponsibility
-		return
-	}
-	go func() { kv.configCh <- void{} }()
-
-	// same config num, we need to drop all request after sent Shard state
 	reply.Err = kv.Commit(Op{
 		Shard:     args.Shard,
 		ConfigNum: args.ConfigNum,
@@ -163,6 +139,26 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,
 	}, func() Err {
+		<-kv.configCh
+		configNum := kv.config.Num
+		go func() { kv.configCh <- void{} }()
+
+		if configNum < args.ConfigNum {
+			return ErrNoResponsibility
+		}
+		if configNum > args.ConfigNum {
+			<-kv.dataCh
+			data, exist := kv.data[args.Shard][args.ConfigNum]
+			dup := mapCopy(kv.appliedButNotReceived[args.Shard])
+			go func() { kv.dataCh <- void{} }()
+			if exist {
+				reply.Data = data
+				reply.Dup = dup
+				return OK
+			}
+			return ErrNoResponsibility
+		}
+
 		// when finished, this configNum must have state (by this commit, or updateConfig commit)
 		// if not, try again
 		<-kv.dataCh

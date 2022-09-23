@@ -152,8 +152,7 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 			Debug(dSnap, kv.gid-100, "Update %v = %v, index %v", c.Key, m[c.Key], index)
 		}
 	case GetShardOp:
-		// When a GetShard committed, must do not operate this shard anymore
-		// there is a G with newer config, need to snapshot the state and give to it.
+		// same config num, we need to drop all request after sent Shard state
 		if c.ConfigNum == kv.config.Num {
 			if kv.config.Shards[c.Shard] == kv.gid {
 				kv.config.Shards[c.Shard] = -1
