@@ -90,6 +90,8 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 		//Debug(dApply, kv.gid-100, "Apply Command %+v", c)
 	}
 
+	kv.commitIndex = index
+
 	shardDup := 0
 	if c.Operator == GetOp || c.Operator == PutOp || c.Operator == AppendOp {
 		shardDup = key2shard(c.Key)
@@ -104,8 +106,6 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 		// have applied before, then don't apply it again
 		return OK
 	}
-
-	kv.commitIndex = index
 
 	switch c.Operator {
 	case GetOp:
