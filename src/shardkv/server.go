@@ -34,8 +34,9 @@ type Op struct {
 	// for GetShard
 	ConfigNum int
 	Shard     int
-	// for FetchShard
+	// for UpdateData
 	Data map[string]string
+	Dup  map[int64]void
 }
 
 type ShardKV struct {
@@ -141,9 +142,11 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		go func() { kv.configCh <- void{} }()
 		<-kv.dataCh
 		data, exist := kv.data[args.Shard][args.ConfigNum]
+		dup := mapCopy(kv.appliedButNotReceived[args.Shard])
 		go func() { kv.dataCh <- void{} }()
 		if exist {
 			reply.Data = data
+			reply.Dup = dup
 			reply.Err = OK
 			return
 		}
@@ -162,10 +165,14 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 	}, func() Err {
 		// when finished, this configNum must have state (by this commit, or updateConfig commit)
 		// if not, try again
+		<-kv.dataCh
 		data, exist := kv.data[args.Shard][args.ConfigNum]
+		dup := mapCopy(kv.appliedButNotReceived[args.Shard])
+		go func() { kv.dataCh <- void{} }()
 		if !exist {
 			return ErrWrongLeader
 		}
+		reply.Dup = dup
 		reply.Data = data
 		return OK
 	})
@@ -185,6 +192,7 @@ func (kv *ShardKV) UpdateData(args *UpdateDataArgs, reply *UpdateDataReply) {
 		Shard:     args.Shard,
 		ConfigNum: args.ConfigNum,
 		Data:      mapCopy(args.Data),
+		Dup:       mapCopy(args.Dup),
 		Operator:  UpdateDataOp,
 		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,

@@ -176,7 +176,7 @@ func (ck *Clerk) PutAppend(key string, value string, op string) {
 	}
 }
 
-func (ck *Clerk) GetShard(shard, gid, configNum int, servers []string) (map[string]string, Err) {
+func (ck *Clerk) GetShard(shard, gid, configNum int, servers []string) (map[string]string, map[int64]void, Err) {
 	rid := nrand()
 	for {
 		leaderIndex := 0
@@ -203,7 +203,7 @@ func (ck *Clerk) GetShard(shard, gid, configNum int, servers []string) (map[stri
 		}, &reply) {
 			if reply.Err != ErrWrongLeader {
 				ck.lastSuc.Store(gid, rid)
-				return reply.Data, reply.Err
+				return reply.Data, reply.Dup, reply.Err
 			}
 		}
 		ck.leader.Store(gid, nextServer(leaderIndex, len(servers)))
@@ -211,7 +211,7 @@ func (ck *Clerk) GetShard(shard, gid, configNum int, servers []string) (map[stri
 	}
 }
 
-func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data map[string]string) {
+func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data map[string]string, dup map[int64]void) {
 	rid := nrand()
 	for {
 		leaderIndex := 0
@@ -234,6 +234,7 @@ func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data ma
 			Shard:     shard,
 			ConfigNum: configNum,
 			Data:      data,
+			Dup:       dup,
 			RequestId: rid,
 			LastSuc:   lastSuc,
 		}, &reply) {

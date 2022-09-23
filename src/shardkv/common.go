@@ -57,12 +57,14 @@ type GetShardArgs struct {
 type GetShardReply struct {
 	Err  Err
 	Data map[string]string
+	Dup  map[int64]void
 }
 
 type UpdateDataArgs struct {
 	Shard     int
 	ConfigNum int
 	Data      map[string]string
+	Dup       map[int64]void
 	RequestId int64
 	LastSuc   int64
 }

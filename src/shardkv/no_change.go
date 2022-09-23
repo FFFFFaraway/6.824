@@ -102,7 +102,7 @@ func (kv *ShardKV) Commit(command Op, postFunc func() Err) Err {
 	return ErrWrongLeader
 }
 
-func mapCopy[K string, V string](m map[K]V) (res map[K]V) {
+func mapCopy[K string | int64, V string | void](m map[K]V) (res map[K]V) {
 	res = make(map[K]V)
 	for k, v := range m {
 		res[k] = v
