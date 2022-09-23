@@ -86,9 +86,16 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 		//Debug(dApply, kv.gid-100, "Apply Command %+v", c)
 	}
 
+	shardDup := 0
+	if c.Operator == GetOp || c.Operator == PutOp || c.Operator == AppendOp {
+		shardDup = key2shard(c.Key)
+	} else if c.Operator == UpdateDataOp {
+		shardDup = c.Shard
+	}
+
 	// lastSuc received by client, delete it
-	delete(kv.appliedButNotReceived, c.LastSuc)
-	_, exist := kv.appliedButNotReceived[c.RequestId]
+	delete(kv.appliedButNotReceived[shardDup], c.LastSuc)
+	_, exist := kv.appliedButNotReceived[shardDup][c.RequestId]
 	if exist {
 		// have applied before, then don't apply it again
 		return OK
@@ -175,7 +182,7 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 	kv.commitIndex = index
 
 	// only applied when OK
-	kv.appliedButNotReceived[c.RequestId] = void{}
+	kv.appliedButNotReceived[shardDup][c.RequestId] = void{}
 
 	return OK
 }

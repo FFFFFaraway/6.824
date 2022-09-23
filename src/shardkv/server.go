@@ -60,7 +60,7 @@ type ShardKV struct {
 	notification sync.Map
 	// for duplicate apply detection: applied to state machine but haven't received by client yet
 	// map[requestId int64]void
-	appliedButNotReceived map[int64]void
+	appliedButNotReceived [shardctrler.NShards]map[int64]void
 	persister             *raft.Persister
 	// data: responsible data in "history configuration"
 	// data[shard][configNum] -> data
@@ -302,7 +302,9 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.mck = shardctrler.MakeClerk(kv.ctrlers)
 	kv.clerk = MakeClerk(ctrlers, make_end)
 
-	kv.appliedButNotReceived = make(map[int64]void)
+	for s := range kv.data {
+		kv.appliedButNotReceived[s] = make(map[int64]void)
+	}
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.dataCh = make(chan void)
 	kv.configCh = make(chan void)
