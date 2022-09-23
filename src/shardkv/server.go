@@ -96,8 +96,10 @@ func (kv *ShardKV) updateConfig() {
 			continue
 		}
 
+		Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
 		if servers, exist := newConfig.Groups[kv.gid]; exist {
-			Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
+			kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
+		} else if servers, exist := config.Groups[kv.gid]; exist {
 			kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
 		} else {
 			time.Sleep(ConfigurationTimeout)
@@ -106,11 +108,6 @@ func (kv *ShardKV) updateConfig() {
 }
 
 func (kv *ShardKV) UpdateConfig(args *UpdateConfigArgs, reply *UpdateConfigReply) {
-	_, isLeader := kv.rf.GetState()
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
 	reply.Err = kv.Commit(Op{
 		Config:    args.Config,
 		Operator:  ConfigOp,
@@ -125,13 +122,6 @@ func (kv *ShardKV) UpdateConfig(args *UpdateConfigArgs, reply *UpdateConfigReply
 func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 	//Debug(dInfo, kv.gid-100, "GetShard %+v", args)
 	//defer Debug(dInfo, kv.gid-100, "GetShard reply %+v", reply)
-
-	_, isLeader := kv.rf.GetState()
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
 	reply.Err = kv.Commit(Op{
 		Shard:     args.Shard,
 		ConfigNum: args.ConfigNum,
@@ -177,13 +167,6 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 func (kv *ShardKV) UpdateData(args *UpdateDataArgs, reply *UpdateDataReply) {
 	//Debug(dInfo, kv.gid-100, "GetShard %+v", args)
 	//defer Debug(dInfo, kv.gid-100, "GetShard reply %+v", reply)
-	_, isLeader := kv.rf.GetState()
-	if !isLeader {
-		reply.Err = ErrWrongLeader
-		return
-	}
-
-	// same config num, we need to drop all request after sent Shard state
 	reply.Err = kv.Commit(Op{
 		Shard:     args.Shard,
 		ConfigNum: args.ConfigNum,
@@ -233,15 +216,6 @@ func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 func (kv *ShardKV) PutAppend(args *PutAppendArgs, reply *PutAppendReply) {
 	//Debug(dInfo, kv.gid-100, "PutAppend %+v", args)
 	//defer Debug(dInfo, kv.gid-100, "PutAppend reply %+v", reply)
-	shard := key2shard(args.Key)
-	<-kv.configCh
-	specGID := kv.config.Shards[shard]
-	go func() { kv.configCh <- void{} }()
-	if specGID != kv.gid {
-		reply.Err = ErrWrongGroup
-		return
-	}
-
 	Operator := -1
 	switch args.Op {
 	case "Put":

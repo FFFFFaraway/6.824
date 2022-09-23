@@ -267,6 +267,9 @@ func (sc *ShardCtrler) Query(args *QueryArgs, reply *QueryReply) {
 			reply.Config = sc.configs[len(sc.configs)-1]
 		} else {
 			reply.Config = sc.configs[args.Num]
+			if reply.Config.Num != args.Num {
+				panic("Number wrong!!!")
+			}
 		}
 		sc.mu.Unlock()
 	})

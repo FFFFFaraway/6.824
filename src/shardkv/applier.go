@@ -153,7 +153,8 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 		}
 	case GetShardOp:
 		// same config num, we need to drop all request after sent Shard state
-		if c.ConfigNum == kv.config.Num {
+		// or asked config num is bigger, then we can't hold the shard.
+		if c.ConfigNum >= kv.config.Num {
 			if kv.config.Shards[c.Shard] == kv.gid {
 				kv.config.Shards[c.Shard] = -1
 			}
