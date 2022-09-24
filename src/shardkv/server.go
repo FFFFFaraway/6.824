@@ -143,8 +143,8 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 			dup := kv.appliedButNotReceived[args.Shard][args.ConfigNum]
 			go func() { kv.dataCh <- void{} }()
 			if exist {
-				reply.Data = data
-				reply.Dup = dup
+				reply.Data = mapCopy(data)
+				reply.Dup = mapCopy(dup)
 				return OK
 			}
 			return ErrNoResponsibility
@@ -159,8 +159,8 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		if !exist {
 			return ErrWrongLeader
 		}
-		reply.Dup = dup
-		reply.Data = data
+		reply.Data = mapCopy(data)
+		reply.Dup = mapCopy(dup)
 		return OK
 	})
 }

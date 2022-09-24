@@ -233,8 +233,8 @@ func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data ma
 		if ck.make_end(servers[leaderIndex]).Call("ShardKV.UpdateData", &UpdateDataArgs{
 			Shard:     shard,
 			ConfigNum: configNum,
-			Data:      data,
-			Dup:       dup,
+			Data:      mapCopy(data),
+			Dup:       mapCopy(dup),
 			RequestId: rid,
 			LastSuc:   lastSuc,
 		}, &reply) {
