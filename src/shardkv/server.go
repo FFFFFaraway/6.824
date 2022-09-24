@@ -61,7 +61,7 @@ type ShardKV struct {
 	notification sync.Map
 	// for duplicate apply detection: applied to state machine but haven't received by client yet
 	// map[requestId int64]void
-	appliedButNotReceived [shardctrler.NShards]map[int64]void
+	appliedButNotReceived [shardctrler.NShards]map[int]map[int64]void
 	persister             *raft.Persister
 	// data: responsible data in "history configuration"
 	// data[shard][configNum] -> data
@@ -88,20 +88,21 @@ func (kv *ShardKV) updateConfig() {
 		//Debug(dInfo, kv.gid-100, "try update %v", newConfig)
 		// There are no others writing it, so we can copy once to avoid waiting lock
 		<-kv.configCh
-		config := kv.config
-		go func() { kv.configCh <- void{} }()
-
-		if config.Num >= newConfig.Num {
+		if kv.config.Num >= newConfig.Num {
+			go func() { kv.configCh <- void{} }()
 			time.Sleep(ConfigurationTimeout)
 			continue
 		}
 
 		Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
 		if servers, exist := newConfig.Groups[kv.gid]; exist {
+			go func() { kv.configCh <- void{} }()
 			kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
-		} else if servers, exist := config.Groups[kv.gid]; exist {
+		} else if servers, exist := kv.config.Groups[kv.gid]; exist {
+			go func() { kv.configCh <- void{} }()
 			kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
 		} else {
+			go func() { kv.configCh <- void{} }()
 			time.Sleep(ConfigurationTimeout)
 		}
 	}
@@ -139,7 +140,7 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		if configNum > args.ConfigNum {
 			<-kv.dataCh
 			data, exist := kv.data[args.Shard][args.ConfigNum]
-			dup := mapCopy(kv.appliedButNotReceived[args.Shard])
+			dup := kv.appliedButNotReceived[args.Shard][args.ConfigNum]
 			go func() { kv.dataCh <- void{} }()
 			if exist {
 				reply.Data = data
@@ -153,7 +154,7 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		// if not, try again
 		<-kv.dataCh
 		data, exist := kv.data[args.Shard][args.ConfigNum]
-		dup := mapCopy(kv.appliedButNotReceived[args.Shard])
+		dup := kv.appliedButNotReceived[args.Shard][args.ConfigNum]
 		go func() { kv.dataCh <- void{} }()
 		if !exist {
 			return ErrWrongLeader
@@ -281,7 +282,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.clerk = MakeClerk(ctrlers, make_end)
 
 	for s := range kv.data {
-		kv.appliedButNotReceived[s] = make(map[int64]void)
+		kv.appliedButNotReceived[s] = make(map[int]map[int64]void)
 	}
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.dataCh = make(chan void)

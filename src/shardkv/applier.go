@@ -20,9 +20,12 @@ func (kv *ShardKV) fetchShard() {
 			data[s][j] = mapCopy(kv.data[s][j])
 		}
 	}
-	var dup [shardctrler.NShards]map[int64]void
+	var dup [shardctrler.NShards]map[int]map[int64]void
 	for s := range kv.appliedButNotReceived {
-		dup[s] = mapCopy(kv.appliedButNotReceived[s])
+		dup[s] = make(map[int]map[int64]void)
+		for j := range kv.appliedButNotReceived[s] {
+			dup[s][j] = mapCopy(kv.appliedButNotReceived[s][j])
+		}
 	}
 	go func() { kv.dataCh <- void{} }()
 
@@ -64,7 +67,7 @@ func (kv *ShardKV) fetchShard() {
 			}
 			if requestGID == kv.gid {
 				if state, exist := data[s][prevConfig.Num]; exist {
-					kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup[s]))
+					kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup[s][prevConfig.Num]))
 					finished[i] = true
 				}
 				continue
@@ -100,8 +103,8 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 	}
 
 	// lastSuc received by client, delete it
-	delete(kv.appliedButNotReceived[shardDup], c.LastSuc)
-	_, exist := kv.appliedButNotReceived[shardDup][c.RequestId]
+	delete(kv.appliedButNotReceived[shardDup][kv.config.Num], c.LastSuc)
+	_, exist := kv.appliedButNotReceived[shardDup][kv.config.Num][c.RequestId]
 	if exist {
 		// have applied before, then don't apply it again
 		return OK
@@ -194,14 +197,17 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 			}
 		} else {
 			kv.data[c.Shard][c.ConfigNum] = mapCopy(c.Data)
-			kv.appliedButNotReceived[c.Shard] = mapCopy(c.Dup)
+			kv.appliedButNotReceived[c.Shard][c.ConfigNum] = mapCopy(c.Dup)
 			if leader {
 				Debug(dSnap, kv.gid-100, "UpdateData s: %v, c: %v, data: %v, %v, index %v", c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
 			}
 		}
 	}
+	if _, exist := kv.appliedButNotReceived[shardDup][kv.config.Num]; !exist {
+		kv.appliedButNotReceived[shardDup][kv.config.Num] = make(map[int64]void)
+	}
 	// only applied when OK
-	kv.appliedButNotReceived[shardDup][c.RequestId] = void{}
+	kv.appliedButNotReceived[shardDup][kv.config.Num][c.RequestId] = void{}
 
 	return OK
 }

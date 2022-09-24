@@ -61,10 +61,10 @@ fi
 #if [ $# -gt 1 ]; then
 #	parallelism="$2"
 #fi
-parallelism=32
+parallelism=128
 
 # Default to no test filtering unless otherwise specified
-test="Snapshot"
+test="Concurrent3"
 if [ $# -gt 2 ]; then
 	test="$3"
 fi

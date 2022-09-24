@@ -81,7 +81,7 @@ func (kv *ShardKV) Commit(command Op, postFunc func() Err) Err {
 
 	select {
 	case <-kv.dead:
-		Debug(dClean, kv.gid-100, "Killed")
+		Debug(dClean, kv.gid-100, "%v Killed", command.RequestId)
 	case realIdErr := <-waitCh:
 		if realIdErr.Err != OK {
 			Debug(dInfo, kv.gid-100, opName+" wrong group %v", specId)
