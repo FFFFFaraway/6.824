@@ -154,9 +154,11 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 	case GetShardOp:
 		// same config num, we need to drop all request after sent Shard state
 		// or asked config num is bigger, then we can't hold the shard.
+		// [rare] It's possible that we are asked for like C5, but we are at C2, then we can't hold S in C2,
+		// and ALSO we may then receive a C4 config then overwrite that forbidden flag (if we just use -1).
 		if c.ConfigNum >= kv.config.Num {
 			if kv.config.Shards[c.Shard] == kv.gid {
-				kv.config.Shards[c.Shard] = -1
+				kv.config.Shards[c.Shard] = -c.ConfigNum
 			}
 		}
 		if leader {
@@ -164,7 +166,19 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 		}
 	case ConfigOp:
 		if c.Config.Num > kv.config.Num {
-			kv.config = c.Config
+			kv.config.Num = c.Config.Num
+			kv.config.Groups = c.Config.Groups
+			// [rare] It's possible that we are asked for like C5, but we are at C2, then we can't hold S in C2,
+			// and ALSO we may then receive a C4 config then overwrite that forbidden flag.
+			for s := range c.Config.Shards {
+				forbiddenNum := 0
+				if kv.config.Shards[s] < 0 {
+					forbiddenNum = -kv.config.Shards[s]
+				}
+				if c.Config.Num > forbiddenNum {
+					kv.config.Shards[s] = c.Config.Shards[s]
+				}
+			}
 			if leader {
 				Debug(dSnap, kv.gid-100, "Update config %v, index %v", kv.config, index)
 			}
