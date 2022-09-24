@@ -39,10 +39,18 @@ func (kv *ShardKV) readPersist(snapshot []byte) {
 	if snapshot == nil || len(snapshot) < 1 {
 		return
 	}
+	// If the snapshot is out of date
+	var lastIndex int
 	r := bytes.NewBuffer(snapshot)
 	d := labgob.NewDecoder(r)
+	d.Decode(&lastIndex)
+
+	if lastIndex < kv.commitIndex {
+		return
+	}
+
 	<-kv.dataCh
-	d.Decode(&kv.snapshotLastIndex)
+	kv.snapshotLastIndex = lastIndex
 	d.Decode(&kv.config)
 	d.Decode(&kv.data)
 	d.Decode(&kv.appliedButNotReceived)
