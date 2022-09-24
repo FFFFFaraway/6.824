@@ -61,20 +61,20 @@ func (kv *ShardKV) fetchShard() {
 			}
 			requestGID := prevConfig.Shards[s]
 			if requestGID == 0 {
-				kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], make(map[string]string), make(map[int64]void))
+				kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], make(map[string]string), make(map[int64]void), -1)
 				finished[i] = true
 				continue
 			}
 			if requestGID == kv.gid {
-				if state, exist := data[s][prevConfig.Num]; exist {
-					kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup[s][prevConfig.Num]))
+				if _, exist := data[s][prevConfig.Num]; exist {
+					kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], nil, nil, prevConfig.Num)
 					finished[i] = true
 				}
 				continue
 			}
 			state, dup, err := kv.clerk.GetShard(s, requestGID, prevConfig.Num, prevConfig.Groups[requestGID])
 			if err == OK {
-				kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup))
+				kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup), -1)
 				finished[i] = true
 			}
 		}
@@ -196,10 +196,19 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 				Debug(dSnap, kv.gid-100, "UpdateData failed s: %v, c: %v, data: %v, %v, index %v", c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
 			}
 		} else {
-			kv.data[c.Shard][c.ConfigNum] = mapCopy(c.Data)
-			kv.appliedButNotReceived[c.Shard][c.ConfigNum] = mapCopy(c.Dup)
-			if leader {
-				Debug(dSnap, kv.gid-100, "UpdateData s: %v, c: %v, data: %v, %v, index %v", c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
+			if c.PrevNum != -1 {
+				// self UpdateData
+				kv.data[c.Shard][c.ConfigNum] = mapCopy(kv.data[c.Shard][c.PrevNum])
+				kv.appliedButNotReceived[c.Shard][c.ConfigNum] = mapCopy(kv.appliedButNotReceived[c.Shard][c.PrevNum])
+				if leader {
+					Debug(dSnap, kv.gid-100, "Self UpdateData from %v s: %v, c: %v, data: %v, %v, index %v", c.PrevNum, c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
+				}
+			} else {
+				kv.data[c.Shard][c.ConfigNum] = mapCopy(c.Data)
+				kv.appliedButNotReceived[c.Shard][c.ConfigNum] = mapCopy(c.Dup)
+				if leader {
+					Debug(dSnap, kv.gid-100, "UpdateData s: %v, c: %v, data: %v, %v, index %v", c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
+				}
 			}
 		}
 	}
