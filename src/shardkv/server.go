@@ -96,7 +96,7 @@ func (kv *ShardKV) updateConfig() {
 			continue
 		}
 
-		Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
+		//Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
 		if servers, exist := newConfig.Groups[kv.gid]; exist {
 			go func() { kv.configCh <- void{} }()
 			kv.clerk.UpdateConfig(kv.gid, newConfig, servers)

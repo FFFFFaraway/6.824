@@ -73,6 +73,7 @@ func (kv *ShardKV) fetchShard() {
 				continue
 			}
 			state, dup, err := kv.clerk.GetShard(s, requestGID, prevConfig.Num, prevConfig.Groups[requestGID])
+			Debug(dInfo, kv.gid-100, "S%v %v -> %v", s, requestGID, kv.gid)
 			if err == OK {
 				kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup), -1)
 				finished[i] = true
@@ -165,7 +166,7 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 			}
 		}
 		if leader {
-			Debug(dSnap, kv.gid-100, "GetShardOp config.Shards: %v, index %v", kv.config.Shards, index)
+			//Debug(dSnap, kv.gid-100, "GetShardOp Shards: %v, index %v", kv.config.Shards, index)
 		}
 	case ConfigOp:
 		if c.Config.Num > kv.config.Num {
@@ -194,6 +195,10 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 		if _, exist := kv.data[c.Shard][c.ConfigNum]; exist {
 			if leader {
 				Debug(dSnap, kv.gid-100, "UpdateData failed s: %v, c: %v, data: %v, %v, index %v", c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
+			}
+		} else if kv.config.Shards[c.Shard] != kv.gid {
+			if leader {
+				Debug(dSnap, kv.gid-100, "UpdateData failed, No responsibility s: %v, c: %v, data: %v, %v, index %v", c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
 			}
 		} else {
 			if c.PrevNum != -1 {
