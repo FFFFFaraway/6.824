@@ -68,11 +68,12 @@ func (kv *ShardKV) fetchShard() {
 					}
 					if requestGID == kv.gid {
 						<-kv.dataCh
-						state, exist := kv.data[s][prevConfig.Num]
-						dup := kv.appliedButNotReceived[s][prevConfig.Num]
+						originData, exist := kv.data[s][prevConfig.Num]
+						state := mapCopy(originData)
+						dup := mapCopy(kv.appliedButNotReceived[s][prevConfig.Num])
 						go func() { kv.dataCh <- void{} }()
 						if exist {
-							kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup))
+							kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], state, dup)
 							finished[i] = true
 						}
 						continue
@@ -80,7 +81,7 @@ func (kv *ShardKV) fetchShard() {
 					state, dup, err := kv.clerk.GetShard(s, requestGID, prevConfig.Num, prevConfig.Groups[requestGID])
 					Debug(dInfo, kv.gid-100, "S%v %v -> %v", s, requestGID, kv.gid)
 					if err == OK {
-						kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup))
+						kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], state, dup)
 						finished[i] = true
 					}
 				}

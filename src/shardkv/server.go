@@ -20,7 +20,7 @@ const (
 
 const (
 	RequestWaitTimeout   = 300 * time.Millisecond
-	ConfigurationTimeout = 300 * time.Millisecond
+	ConfigurationTimeout = 100 * time.Millisecond
 	fetchShardTimeout    = 100 * time.Millisecond
 )
 
@@ -32,7 +32,7 @@ type Op struct {
 	LastSuc   int64
 	// for Internal UpdateConfig
 	Config shardctrler.Config
-	// for GetShard
+	// for GetShard and UpdateData
 	ConfigNum int
 	Shard     int
 	// for UpdateData
@@ -76,35 +76,38 @@ type ShardKV struct {
 
 func (kv *ShardKV) updateConfig() {
 	for {
-		_, isLeader := kv.rf.GetState()
-		// only the leader need to update the configuration
-		if !isLeader {
-			time.Sleep(ConfigurationTimeout)
-			continue
-		}
-		<-kv.mckCh
-		newConfig := kv.mck.Query(-1)
-		go func() { kv.mckCh <- void{} }()
+		select {
+		case <-kv.dead:
+			return
+		case <-timeoutCh(ConfigurationTimeout):
+			_, isLeader := kv.rf.GetState()
+			// only the leader need to update the configuration
+			if !isLeader {
+				continue
+			}
 
-		//Debug(dInfo, kv.gid-100, "try update %v", newConfig)
-		// There are no others writing it, so we can copy once to avoid waiting lock
-		<-kv.configCh
-		if kv.config.Num >= newConfig.Num {
-			go func() { kv.configCh <- void{} }()
-			time.Sleep(ConfigurationTimeout)
-			continue
-		}
+			<-kv.mckCh
+			newConfig := kv.mck.Query(-1)
+			go func() { kv.mckCh <- void{} }()
 
-		//Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
-		if servers, exist := newConfig.Groups[kv.gid]; exist {
-			go func() { kv.configCh <- void{} }()
-			kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
-		} else if servers, exist := kv.config.Groups[kv.gid]; exist {
-			go func() { kv.configCh <- void{} }()
-			kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
-		} else {
-			go func() { kv.configCh <- void{} }()
-			time.Sleep(ConfigurationTimeout)
+			//Debug(dInfo, kv.gid-100, "try update %v", newConfig)
+			// There are no others writing it, so we can copy once to avoid waiting lock
+			<-kv.configCh
+			if kv.config.Num >= newConfig.Num {
+				go func() { kv.configCh <- void{} }()
+				continue
+			}
+
+			//Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
+			if servers, exist := newConfig.Groups[kv.gid]; exist {
+				go func() { kv.configCh <- void{} }()
+				kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
+			} else if servers, exist := kv.config.Groups[kv.gid]; exist {
+				go func() { kv.configCh <- void{} }()
+				kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
+			} else {
+				go func() { kv.configCh <- void{} }()
+			}
 		}
 	}
 }
@@ -140,23 +143,15 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		<-kv.dataCh
 		defer func() { go func() { kv.dataCh <- void{} }() }()
 
-		if configNum > args.ConfigNum {
-			data, exist := kv.data[args.Shard][args.ConfigNum]
-			dup := kv.appliedButNotReceived[args.Shard][args.ConfigNum]
-			if !exist {
-				Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v", args.Shard)
-				return ErrNoResponsibility
-			}
-			reply.Data = mapCopy(data)
-			reply.Dup = mapCopy(dup)
-			return OK
-		}
-
-		// when finished, this configNum must have state (by this commit, or updateConfig commit)
-		// if not, try again
 		data, exist := kv.data[args.Shard][args.ConfigNum]
 		dup := kv.appliedButNotReceived[args.Shard][args.ConfigNum]
 		if !exist {
+			if configNum > args.ConfigNum {
+				Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v", args.Shard)
+				return ErrNoResponsibility
+			}
+			// when finished, this configNum must have state (by this commit, or updateConfig commit)
+			// if not, try again
 			Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v, but is about to appear", args.Shard)
 			return ErrWrongLeader
 		}
