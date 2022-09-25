@@ -49,7 +49,7 @@ if ! go test -c -o tester; then
 	exit 1
 fi
 
-rm test/test-*
+rm test-*
 # Default to 100 runs unless otherwise specified
 runs=1280
 if [ $# -gt 0 ]; then
@@ -61,10 +61,10 @@ fi
 #if [ $# -gt 1 ]; then
 #	parallelism="$2"
 #fi
-parallelism=32
+parallelism=8
 
 # Default to no test filtering unless otherwise specified
-test="Concurrent3"
+test=""
 if [ $# -gt 2 ]; then
 	test="$3"
 fi
@@ -133,10 +133,10 @@ for i in $(seq "$((success+failed+1))" "$runs"); do
 
 	# Run the tester, passing -test.run if necessary
 	if [[ -z "$test" ]]; then
-		./tester -test.v 2> "test/test-${i}.err" > "test/test-${i}.log" &
+		./tester -test.v 2> "test-${i}.err" > "test-${i}.log" &
 		pid=$!
 	else
-		./tester -test.run "$test" -test.v 2> "test/test-${i}.err" > "test/test-${i}.log" &
+		./tester -test.run "$test" -test.v 2> "test-${i}.err" > "test-${i}.log" &
 		pid=$!
 	fi
 
