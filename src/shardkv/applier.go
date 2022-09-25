@@ -1,85 +1,93 @@
 package shardkv
 
-import "6.824/shardctrler"
+import (
+	"6.824/shardctrler"
+)
 
 type IdErr struct {
 	ID  int64
 	Err Err
 }
 
+func allFinished(s []bool) bool {
+	for _, f := range s {
+		if !f {
+			return false
+		}
+	}
+	return true
+}
+
 func (kv *ShardKV) fetchShard() {
-	<-kv.configCh
-	config := kv.config
-	go func() { kv.configCh <- void{} }()
-
-	<-kv.dataCh
-	var data [shardctrler.NShards]map[int]map[string]string
-	for s := range kv.data {
-		data[s] = make(map[int]map[string]string)
-		for j := range kv.data[s] {
-			data[s][j] = mapCopy(kv.data[s][j])
-		}
-	}
-	var dup [shardctrler.NShards]map[int]map[int64]void
-	for s := range kv.appliedButNotReceived {
-		dup[s] = make(map[int]map[int64]void)
-		for j := range kv.appliedButNotReceived[s] {
-			dup[s][j] = mapCopy(kv.appliedButNotReceived[s][j])
-		}
-	}
-	go func() { kv.dataCh <- void{} }()
-
-	responsibleShards := make([]int, 0)
-	finished := make([]bool, 0)
-	for s := 0; s < shardctrler.NShards; s++ {
-		if config.Shards[s] == kv.gid {
-			responsibleShards = append(responsibleShards, s)
-			// it's possible when duplicate request sent
-			// like: restart and duplicate with the backups
-			_, exist := data[s][config.Num]
-			finished = append(finished, exist)
-		}
-	}
-
-	allFinished := func(s []bool) bool {
-		for _, f := range s {
-			if !f {
-				return false
-			}
-		}
-		return true
-	}
-
-	prevConfig := config
-	for !allFinished(finished) {
-		<-kv.mckCh
-		prevConfig = kv.mck.Query(prevConfig.Num - 1)
-		go func() { kv.mckCh <- void{} }()
-		for i, s := range responsibleShards {
-			if finished[i] {
+	for {
+		select {
+		case <-kv.dead:
+			return
+		case <-timeoutCh(fetchShardTimeout):
+			_, leader := kv.rf.GetState()
+			if !leader {
 				continue
 			}
-			requestGID := prevConfig.Shards[s]
-			if requestGID == 0 {
-				kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], make(map[string]string), make(map[int64]void))
-				finished[i] = true
-				continue
-			}
-			if requestGID == kv.gid {
-				if state, exist := data[s][prevConfig.Num]; exist {
-					kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup[s][prevConfig.Num]))
-					finished[i] = true
+
+			<-kv.configCh
+			config := kv.config
+			go func() { kv.configCh <- void{} }()
+
+			responsibleShards := make([]int, 0)
+			finished := make([]bool, 0)
+			<-kv.dataCh
+			for s := 0; s < shardctrler.NShards; s++ {
+				if config.Shards[s] == kv.gid {
+					responsibleShards = append(responsibleShards, s)
+					// it's possible when duplicate request sent
+					// like: restart and duplicate with the backups
+					_, exist := kv.data[s][config.Num]
+					finished = append(finished, exist)
 				}
-				continue
 			}
-			state, dup, err := kv.clerk.GetShard(s, requestGID, prevConfig.Num, prevConfig.Groups[requestGID])
-			if err == OK {
-				kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup))
-				finished[i] = true
+			go func() { kv.dataCh <- void{} }()
+
+			prevConfig := config
+			for !allFinished(finished) {
+				<-kv.mckCh
+				if prevConfig.Num-1 == -1 {
+					panic("ask up to date")
+				}
+				prevConfig = kv.mck.Query(prevConfig.Num - 1)
+				go func() { kv.mckCh <- void{} }()
+				Debug(dSnap, kv.gid-100, "try to ask prevConfig %v", prevConfig.Num)
+				for i, s := range responsibleShards {
+					if finished[i] {
+						continue
+					}
+					requestGID := prevConfig.Shards[s]
+					if requestGID == 0 {
+						kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], make(map[string]string), make(map[int64]void))
+						finished[i] = true
+						continue
+					}
+					if requestGID == kv.gid {
+						<-kv.dataCh
+						state, exist := kv.data[s][prevConfig.Num]
+						dup := kv.appliedButNotReceived[s][prevConfig.Num]
+						go func() { kv.dataCh <- void{} }()
+						if exist {
+							kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup))
+							finished[i] = true
+						}
+						continue
+					}
+					state, dup, err := kv.clerk.GetShard(s, requestGID, prevConfig.Num, prevConfig.Groups[requestGID])
+					Debug(dInfo, kv.gid-100, "S%v %v -> %v", s, requestGID, kv.gid)
+					if err == OK {
+						kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], mapCopy(state), mapCopy(dup))
+						finished[i] = true
+					}
+				}
 			}
+			Debug(dInfo, kv.gid-100, "Finished fill data C%v", config.Num)
 		}
 	}
-	Debug(dInfo, kv.gid-100, "Finished fill data %v", data)
 }
 
 func (kv *ShardKV) applyCommand(index int, c Op) Err {
@@ -165,7 +173,7 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 			}
 		}
 		if leader {
-			Debug(dSnap, kv.gid-100, "GetShardOp config.Shards: %v, index %v", kv.config.Shards, index)
+			//Debug(dSnap, kv.gid-100, "GetShardOp config.Shards: %v, index %v", kv.config.Shards, index)
 		}
 	case ConfigOp:
 		if c.Config.Num > kv.config.Num {

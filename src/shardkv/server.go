@@ -20,7 +20,8 @@ const (
 
 const (
 	RequestWaitTimeout   = 300 * time.Millisecond
-	ConfigurationTimeout = 100 * time.Millisecond
+	ConfigurationTimeout = 300 * time.Millisecond
+	fetchShardTimeout    = 100 * time.Millisecond
 )
 
 type Op struct {
@@ -94,7 +95,7 @@ func (kv *ShardKV) updateConfig() {
 			continue
 		}
 
-		Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
+		//Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
 		if servers, exist := newConfig.Groups[kv.gid]; exist {
 			go func() { kv.configCh <- void{} }()
 			kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
@@ -114,10 +115,7 @@ func (kv *ShardKV) UpdateConfig(args *UpdateConfigArgs, reply *UpdateConfigReply
 		Operator:  ConfigOp,
 		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,
-	}, func() Err {
-		kv.fetchShard()
-		return OK
-	})
+	}, func() Err { return OK })
 }
 
 func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
@@ -135,6 +133,7 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		go func() { kv.configCh <- void{} }()
 
 		if configNum < args.ConfigNum {
+			Debug(dSnap, kv.gid-100, "GetShardOp I still in C%v, you ask me about C%v", configNum, args.ConfigNum)
 			return ErrNoResponsibility
 		}
 		if configNum > args.ConfigNum {
@@ -147,6 +146,7 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 				reply.Dup = mapCopy(dup)
 				return OK
 			}
+			Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v", args.Shard)
 			return ErrNoResponsibility
 		}
 
@@ -157,6 +157,7 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		dup := kv.appliedButNotReceived[args.Shard][args.ConfigNum]
 		go func() { kv.dataCh <- void{} }()
 		if !exist {
+			Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v, but is about to appear", args.Shard)
 			return ErrWrongLeader
 		}
 		reply.Data = mapCopy(data)
@@ -311,6 +312,7 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.compareSnapshot()
 	go kv.cleaner()
 	go kv.updateConfig()
+	go kv.fetchShard()
 
 	return kv
 }
