@@ -38,8 +38,6 @@ type Op struct {
 	// for UpdateData
 	Data map[string]string
 	Dup  map[int64]void
-	// for Self UpdateData
-	PrevNum int
 }
 
 type ShardKV struct {
@@ -176,7 +174,6 @@ func (kv *ShardKV) UpdateData(args *UpdateDataArgs, reply *UpdateDataReply) {
 		ConfigNum: args.ConfigNum,
 		Data:      mapCopy(args.Data),
 		Dup:       mapCopy(args.Dup),
-		PrevNum:   args.PrevNum,
 		Operator:  UpdateDataOp,
 		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,

@@ -211,7 +211,7 @@ func (ck *Clerk) GetShard(shard, gid, configNum int, servers []string) (map[stri
 	}
 }
 
-func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data map[string]string, dup map[int64]void, prevNum int) {
+func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data map[string]string, dup map[int64]void) {
 	rid := nrand()
 	for {
 		leaderIndex := 0
@@ -235,7 +235,6 @@ func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data ma
 			ConfigNum: configNum,
 			Data:      mapCopy(data),
 			Dup:       mapCopy(dup),
-			PrevNum:   prevNum,
 			RequestId: rid,
 			LastSuc:   lastSuc,
 		}, &reply) {
