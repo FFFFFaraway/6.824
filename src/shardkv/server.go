@@ -136,26 +136,26 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 			Debug(dSnap, kv.gid-100, "GetShardOp I still in C%v, you ask me about C%v", configNum, args.ConfigNum)
 			return ErrNoResponsibility
 		}
+
+		<-kv.dataCh
+		defer func() { go func() { kv.dataCh <- void{} }() }()
+
 		if configNum > args.ConfigNum {
-			<-kv.dataCh
 			data, exist := kv.data[args.Shard][args.ConfigNum]
 			dup := kv.appliedButNotReceived[args.Shard][args.ConfigNum]
-			go func() { kv.dataCh <- void{} }()
-			if exist {
-				reply.Data = mapCopy(data)
-				reply.Dup = mapCopy(dup)
-				return OK
+			if !exist {
+				Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v", args.Shard)
+				return ErrNoResponsibility
 			}
-			Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v", args.Shard)
-			return ErrNoResponsibility
+			reply.Data = mapCopy(data)
+			reply.Dup = mapCopy(dup)
+			return OK
 		}
 
 		// when finished, this configNum must have state (by this commit, or updateConfig commit)
 		// if not, try again
-		<-kv.dataCh
 		data, exist := kv.data[args.Shard][args.ConfigNum]
 		dup := kv.appliedButNotReceived[args.Shard][args.ConfigNum]
-		go func() { kv.dataCh <- void{} }()
 		if !exist {
 			Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v, but is about to appear", args.Shard)
 			return ErrWrongLeader
