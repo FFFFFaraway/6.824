@@ -65,6 +65,7 @@ type UpdateDataArgs struct {
 	ConfigNum int
 	Data      map[string]string
 	Dup       map[int64]void
+	PrevNum   int
 	RequestId int64
 	LastSuc   int64
 }
