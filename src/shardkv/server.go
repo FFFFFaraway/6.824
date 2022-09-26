@@ -51,12 +51,13 @@ type ShardKV struct {
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
-	clerk    *Clerk
-	configCh chan void
-	config   shardctrler.Config
-	dead     chan void
-	mckCh    chan void
-	mck      *shardctrler.Clerk
+	clerk       *Clerk
+	configCh    chan void
+	config      shardctrler.Config
+	configCache sync.Map
+	dead        chan void
+	mckCh       chan void
+	mck         *shardctrler.Clerk
 	// each index allocate a channel to inform the waiting request
 	// map[specIndex int]committed RequestId in spec index, chan int64
 	notification sync.Map
