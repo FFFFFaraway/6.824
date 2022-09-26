@@ -46,15 +46,20 @@ loop:
 			for _, s := range responsibleShards {
 				go func(s int, prevConfig shardctrler.Config) {
 					for {
-						<-kv.mckCh
 						if prevConfig.Num-1 == -1 {
 							panic("asking the up to date config instead of previous config")
 						}
-						prevConfig = kv.mck.Query(prevConfig.Num - 1)
-						go func() { kv.mckCh <- void{} }()
-						Debug(dInfo, kv.gid-100, "try to ask prevConfig %v", prevConfig.Num)
-
+						inter, exist := kv.configCache.Load(prevConfig.Num - 1)
+						if exist {
+							prevConfig = inter.(shardctrler.Config)
+						} else {
+							<-kv.mckCh
+							prevConfig = kv.mck.Query(prevConfig.Num - 1)
+							go func() { kv.mckCh <- void{} }()
+							kv.configCache.Store(prevConfig.Num, prevConfig)
+						}
 						requestGID := prevConfig.Shards[s]
+						Debug(dInfo, kv.gid-100, "try to ask G%v with prevConfig C%v for S%v", requestGID-100, prevConfig.Num, s)
 						if requestGID == 0 {
 							kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], make(map[string]string), make(map[int64]void))
 							go func() { finished <- <-finished + 1 }()
