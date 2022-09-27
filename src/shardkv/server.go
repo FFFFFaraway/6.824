@@ -16,11 +16,14 @@ const (
 	ConfigOp
 	GetShardOp
 	UpdateDataOp
+	DeleteBeforeOp
 )
 
 const (
 	RequestWaitTimeout   = 300 * time.Millisecond
 	ConfigurationTimeout = 100 * time.Millisecond
+	RetryLaterSpan       = 100 // time.Millisecond
+	RetryLaterTimeout    = 100 * time.Millisecond
 )
 
 type Op struct {
@@ -71,7 +74,25 @@ type ShardKV struct {
 	// protected by dataCh
 	snapshotLastIndex int
 	commitIndex       int
-	finishedConfig    int
+}
+
+func (kv *ShardKV) getConfig(n int) shardctrler.Config {
+	if n == -1 {
+		<-kv.mckCh
+		c := kv.mck.Query(n)
+		go func() { kv.mckCh <- void{} }()
+		return c
+	}
+	inter, exist := kv.configCache.Load(n)
+	if exist {
+		return inter.(shardctrler.Config)
+	} else {
+		<-kv.mckCh
+		c := kv.mck.Query(n)
+		go func() { kv.mckCh <- void{} }()
+		kv.configCache.Store(c.Num, c)
+		return c
+	}
 }
 
 func (kv *ShardKV) updateConfig() {
@@ -100,17 +121,19 @@ func (kv *ShardKV) updateConfig() {
 			}
 
 			//Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
-			if servers, exist := newConfig.Groups[kv.gid]; exist {
-				kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
-			} else if servers, exist := oldConfig.Groups[kv.gid]; exist {
-				kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
+			// ensure the config is updated
+			queryConfig := newConfig
+			for {
+				if servers, exist := queryConfig.Groups[kv.gid]; exist {
+					kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
+					break
+				}
+				queryConfig = kv.getConfig(queryConfig.Num - 1)
 			}
 
-			for n := oldConfig.Num + 1; n <= newConfig.Num; n++ {
-				<-kv.mckCh
-				config := kv.mck.Query(n)
-				go func() { kv.mckCh <- void{} }()
-				kv.fetchShard(config)
+			// ensure all data before are filled
+			for n := 1; n <= newConfig.Num; n++ {
+				kv.fetchShard(kv.getConfig(n))
 			}
 		}
 	}
@@ -135,29 +158,14 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,
 	}, func() Err {
-		<-kv.configCh
-		configNum := kv.config.Num
-		go func() { kv.configCh <- void{} }()
-
-		if configNum < args.ConfigNum {
-			Debug(dSnap, kv.gid-100, "GetShardOp I still in C%v, you ask me about C%v", configNum, args.ConfigNum)
-			return ErrNoResponsibility
-		}
-
 		<-kv.dataCh
 		defer func() { go func() { kv.dataCh <- void{} }() }()
 
 		data, exist := kv.data[args.Shard][args.ConfigNum]
 		dup := kv.appliedButNotReceived[args.Shard][args.ConfigNum]
 		if !exist {
-			if configNum > args.ConfigNum {
-				Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v", args.Shard)
-				return ErrNoResponsibility
-			}
-			// when finished, this configNum must have state (by this commit, or updateConfig commit)
-			// if not, try again
 			Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v, but is about to appear", args.Shard)
-			return ErrWrongLeader
+			return ErrRetryLater
 		}
 		reply.Data = mapCopy(data)
 		reply.Dup = mapCopy(dup)
@@ -178,6 +186,18 @@ func (kv *ShardKV) UpdateData(args *UpdateDataArgs, reply *UpdateDataReply) {
 		LastSuc:   args.LastSuc,
 	}, func() Err { return OK })
 }
+
+//func (kv *ShardKV) DeleteBefore(args *DeleteBeforeArgs, reply *DeleteBeforeReply) {
+//	//Debug(dInfo, kv.gid-100, "GetShard %+v", args)
+//	//defer Debug(dInfo, kv.gid-100, "GetShard reply %+v", reply)
+//	reply.Err = kv.Commit(Op{
+//		Shard:     args.Shard,
+//		ConfigNum: args.ConfigNum,
+//		Operator:  DeleteBeforeOp,
+//		RequestId: args.RequestId,
+//		LastSuc:   args.LastSuc,
+//	}, func() Err { return OK })
+//}
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	//Debug(dInfo, kv.gid-100, "Get %+v", args)

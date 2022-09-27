@@ -2,6 +2,8 @@ package shardkv
 
 import (
 	"6.824/shardctrler"
+	"math/rand"
+	"time"
 )
 
 type IdErr struct {
@@ -10,6 +12,7 @@ type IdErr struct {
 }
 
 func (kv *ShardKV) fetchShard(config shardctrler.Config) {
+	Debug(dInfo, kv.gid-100, "fetchShard %v", config)
 	_, leader := kv.rf.GetState()
 	if !leader {
 		return
@@ -39,28 +42,28 @@ func (kv *ShardKV) fetchShard(config shardctrler.Config) {
 				if prevConfig.Num-1 == -1 {
 					panic("asking the up to date config instead of previous config")
 				}
-				inter, exist := kv.configCache.Load(prevConfig.Num - 1)
-				if exist {
-					prevConfig = inter.(shardctrler.Config)
-				} else {
-					<-kv.mckCh
-					prevConfig = kv.mck.Query(prevConfig.Num - 1)
-					go func() { kv.mckCh <- void{} }()
-					kv.configCache.Store(prevConfig.Num, prevConfig)
-				}
-				requestGID := prevConfig.Shards[s]
-				Debug(dInfo, kv.gid-100, "try to ask G%v with prevConfig C%v for S%v", requestGID-100, prevConfig.Num, s)
-				if requestGID == 0 {
+				prevConfig = kv.getConfig(prevConfig.Num - 1)
+				if prevConfig.Num == 0 {
 					kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], make(map[string]string), make(map[int64]void))
 					go func() { finished <- <-finished + 1 }()
 					return
 				}
-				state, dup, err := kv.clerk.GetShard(s, requestGID, prevConfig.Num, prevConfig.Groups[requestGID])
-				if err == OK {
-					Debug(dInfo, kv.gid-100, "### S%v G%v C%v <- G%v C%v", s, kv.gid-100, config.Num, requestGID-100, prevConfig.Num)
-					kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], state, dup)
-					go func() { finished <- <-finished + 1 }()
-					return
+				requestGID := prevConfig.Shards[s]
+				Debug(dInfo, kv.gid-100, "try to ask G%v with prevConfig C%v for S%v", requestGID-100, prevConfig.Num, s)
+				if requestGID == 0 {
+					continue
+				}
+				for {
+					state, dup, err := kv.clerk.GetShard(s, requestGID, prevConfig.Num, prevConfig.Groups[requestGID])
+					if err == OK {
+						Debug(dInfo, kv.gid-100, "### S%v G%v C%v <- G%v C%v", s, kv.gid-100, config.Num, requestGID-100, prevConfig.Num)
+						kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], state, dup)
+						//kv.clerk.DeleteBefore(s, kv.gid, prevConfig.Num, prevConfig.Groups[requestGID])
+						go func() { finished <- <-finished + 1 }()
+						return
+					} else if err == ErrRetryLater {
+						time.Sleep(RetryLaterTimeout + time.Duration(rand.Intn(RetryLaterSpan))*time.Millisecond)
+					}
 				}
 			}
 		}(s, config)
@@ -200,6 +203,7 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 				Debug(dSnap, kv.gid-100, "UpdateData s: %v, c: %v, data: %v, %v, index %v", c.Shard, c.ConfigNum, c.Data, c.RequestId, index)
 			}
 		}
+	case DeleteBeforeOp:
 	}
 	if _, exist := kv.appliedButNotReceived[shardDup][kv.config.Num]; !exist {
 		kv.appliedButNotReceived[shardDup][kv.config.Num] = make(map[int64]void)
