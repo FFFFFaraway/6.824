@@ -167,6 +167,9 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 			Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v, but is about to appear", args.Shard)
 			return ErrRetryLater
 		}
+		if deleteFlag, exist := data[""]; exist && deleteFlag == "" {
+			return ErrDeleted
+		}
 		reply.Data = mapCopy(data)
 		reply.Dup = mapCopy(dup)
 		return OK
@@ -187,17 +190,17 @@ func (kv *ShardKV) UpdateData(args *UpdateDataArgs, reply *UpdateDataReply) {
 	}, func() Err { return OK })
 }
 
-//func (kv *ShardKV) DeleteBefore(args *DeleteBeforeArgs, reply *DeleteBeforeReply) {
-//	//Debug(dInfo, kv.gid-100, "GetShard %+v", args)
-//	//defer Debug(dInfo, kv.gid-100, "GetShard reply %+v", reply)
-//	reply.Err = kv.Commit(Op{
-//		Shard:     args.Shard,
-//		ConfigNum: args.ConfigNum,
-//		Operator:  DeleteBeforeOp,
-//		RequestId: args.RequestId,
-//		LastSuc:   args.LastSuc,
-//	}, func() Err { return OK })
-//}
+func (kv *ShardKV) DeleteBefore(args *DeleteBeforeArgs, reply *DeleteBeforeReply) {
+	//Debug(dInfo, kv.gid-100, "GetShard %+v", args)
+	//defer Debug(dInfo, kv.gid-100, "GetShard reply %+v", reply)
+	reply.Err = kv.Commit(Op{
+		Shard:     args.Shard,
+		ConfigNum: args.ConfigNum,
+		Operator:  DeleteBeforeOp,
+		RequestId: args.RequestId,
+		LastSuc:   args.LastSuc,
+	}, func() Err { return OK })
+}
 
 func (kv *ShardKV) Get(args *GetArgs, reply *GetReply) {
 	//Debug(dInfo, kv.gid-100, "Get %+v", args)

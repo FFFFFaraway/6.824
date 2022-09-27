@@ -58,11 +58,19 @@ func (kv *ShardKV) fetchShard(config shardctrler.Config) {
 					if err == OK {
 						Debug(dInfo, kv.gid-100, "### S%v G%v C%v <- G%v C%v", s, kv.gid-100, config.Num, requestGID-100, prevConfig.Num)
 						kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], state, dup)
-						//kv.clerk.DeleteBefore(s, kv.gid, prevConfig.Num, prevConfig.Groups[requestGID])
+						Debug(dInfo, kv.gid-100, "### S%v G%v C%v <- G%v C%v done", s, kv.gid-100, config.Num, requestGID-100, prevConfig.Num)
+						kv.clerk.DeleteBefore(s, requestGID, prevConfig.Num, prevConfig.Groups[requestGID])
 						go func() { finished <- <-finished + 1 }()
 						return
 					} else if err == ErrRetryLater {
 						time.Sleep(RetryLaterTimeout + time.Duration(rand.Intn(RetryLaterSpan))*time.Millisecond)
+					} else if err == ErrDeleted {
+						Debug(dInfo, kv.gid-100, "### S%v G%v C%v <- G%v C%v, deleted", s, kv.gid-100, config.Num, requestGID-100, prevConfig.Num)
+						state = make(map[string]string)
+						state[""] = ""
+						kv.clerk.UpdateData(s, kv.gid, config.Num, config.Groups[kv.gid], state, make(map[int64]void))
+						go func() { finished <- <-finished + 1 }()
+						return
 					}
 				}
 			}
@@ -204,6 +212,13 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 			}
 		}
 	case DeleteBeforeOp:
+		for n := 1; n <= c.ConfigNum; n++ {
+			if _, exist := kv.data[c.Shard][n]; exist {
+				kv.data[c.Shard][n] = make(map[string]string)
+				kv.data[c.Shard][n][""] = ""
+				delete(kv.appliedButNotReceived[c.Shard], n)
+			}
+		}
 	}
 	if _, exist := kv.appliedButNotReceived[shardDup][kv.config.Num]; !exist {
 		kv.appliedButNotReceived[shardDup][kv.config.Num] = make(map[int64]void)

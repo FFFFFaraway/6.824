@@ -18,6 +18,7 @@ const (
 	ErrWrongLeader = "ErrWrongLeader"
 	// ErrRetryLater in GetShard to avoid the deadlock
 	ErrRetryLater = "ErrRetryLater"
+	ErrDeleted    = "ErrDeleted"
 )
 
 type Err string
@@ -83,13 +84,13 @@ type UpdateConfigReply struct {
 	Err Err
 }
 
-//type DeleteBeforeArgs struct {
-//	Shard     int
-//	ConfigNum int
-//	RequestId int64
-//	LastSuc   int64
-//}
-//
-//type DeleteBeforeReply struct {
-//	Err Err
-//}
+type DeleteBeforeArgs struct {
+	Shard     int
+	ConfigNum int
+	RequestId int64
+	LastSuc   int64
+}
+
+type DeleteBeforeReply struct {
+	Err Err
+}

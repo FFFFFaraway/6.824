@@ -77,6 +77,8 @@ func (kv *ShardKV) Commit(command Op, postFunc func() Err) Err {
 		opName = "GetShard"
 	case UpdateDataOp:
 		opName = "UpdateDataOp"
+	case DeleteBeforeOp:
+		opName = "DeleteBeforeOp"
 	}
 
 	select {
