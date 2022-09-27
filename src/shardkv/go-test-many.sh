@@ -64,7 +64,7 @@ fi
 parallelism=32
 
 # Default to no test filtering unless otherwise specified
-test="Challenge2"
+test="Concurrent3"
 #test=""
 if [ $# -gt 2 ]; then
 	test="$3"

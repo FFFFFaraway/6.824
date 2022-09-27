@@ -21,7 +21,6 @@ const (
 const (
 	RequestWaitTimeout   = 300 * time.Millisecond
 	ConfigurationTimeout = 100 * time.Millisecond
-	fetchShardTimeout    = 100 * time.Millisecond
 )
 
 type Op struct {
@@ -92,22 +91,26 @@ func (kv *ShardKV) updateConfig() {
 			go func() { kv.mckCh <- void{} }()
 
 			//Debug(dInfo, kv.gid-100, "try update %v", newConfig)
-			// There are no others writing it, so we can copy once to avoid waiting lock
 			<-kv.configCh
-			if kv.config.Num >= newConfig.Num {
-				go func() { kv.configCh <- void{} }()
+			oldConfig := kv.config
+			go func() { kv.configCh <- void{} }()
+
+			if newConfig.Num <= oldConfig.Num {
 				continue
 			}
 
 			//Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
 			if servers, exist := newConfig.Groups[kv.gid]; exist {
-				go func() { kv.configCh <- void{} }()
 				kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
-			} else if servers, exist := kv.config.Groups[kv.gid]; exist {
-				go func() { kv.configCh <- void{} }()
+			} else if servers, exist := oldConfig.Groups[kv.gid]; exist {
 				kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
-			} else {
-				go func() { kv.configCh <- void{} }()
+			}
+
+			for n := oldConfig.Num + 1; n <= newConfig.Num; n++ {
+				<-kv.mckCh
+				config := kv.mck.Query(n)
+				go func() { kv.mckCh <- void{} }()
+				kv.fetchShard(config)
 			}
 		}
 	}
@@ -308,7 +311,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	go kv.compareSnapshot()
 	go kv.cleaner()
 	go kv.updateConfig()
-	go kv.fetchShard()
 
 	return kv
 }
