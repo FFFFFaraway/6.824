@@ -19,7 +19,6 @@ import (
 // in part 2D you'll want to send other kinds of messages (e.g.,
 // snapshots) on the applyCh, but set CommandValid to false for these
 // other uses.
-//
 type ApplyMsg struct {
 	CommandValid bool
 	Command      interface{}
@@ -46,12 +45,11 @@ const (
 	ApplierSleepTimeout        = 10 * time.Millisecond
 	ApplierSelectWait          = time.Millisecond
 	CommitIndexUpdateTimout    = 10 * time.Millisecond
-	WaitAllDie                 = 100 * time.Second
+	WaitAllDie                 = 5 * time.Second
 )
 
 // Raft
 // A Go object implementing a single Raft peer.
-//
 type Raft struct {
 	peers     []*labrpc.ClientEnd // RPC end points of all peers
 	persister *Persister          // Object to hold this peer's persisted state
@@ -91,7 +89,6 @@ type Raft struct {
 // up CPU time, perhaps causing later tests to fail and generating
 // confusing debug output. any goroutine with a long-running loop
 // should call killed() to check whether it should stop.
-//
 func (rf *Raft) Kill() {
 	select {
 	case <-rf.dead:
@@ -132,6 +129,8 @@ func acquireOrDead[T ChanT](dead chan void, ch chan T) (val T, haveDead bool) {
 		return *new(T), true
 	case val = <-ch:
 		return val, false
+	case <-timeoutCh(WaitAllDie):
+		return *new(T), true
 	}
 }
 
@@ -148,7 +147,6 @@ func acquireOrDead[T ChanT](dead chan void, ch chan T) (val T, haveDead bool) {
 // if it's ever committed. the second return value is the current
 // term. the third return value is true if this server believes it is
 // the leader.
-//
 func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	term, isLeader := rf.GetState()
 	index := -1
@@ -197,7 +195,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 // tester or service expects Raft to send ApplyMsg messages.
 // Make() must return quickly, so it should start goroutines
 // for any long-running work.
-//
 func Make(peers []*labrpc.ClientEnd, me int,
 	persister *Persister, applyCh chan ApplyMsg) *Raft {
 	rf := &Raft{
@@ -273,11 +270,9 @@ type TermCnt struct {
 	Cnt  int
 }
 
-//
 // save Raft's persistent state to stable storage,
 // where it can later be retrieved after a crash and restart.
 // see paper's Figure 2 for a description of what should be persistent.
-//
 func (rf *Raft) persist(term, voteFor int) {
 	_, dead := acquireOrDead(rf.dead, rf.logCh)
 	if dead {
@@ -310,9 +305,7 @@ func (rf *Raft) persist(term, voteFor int) {
 	Debug(dPersist, rf.me, "logTerm: %v, term: %v", compactLogTerm, term)
 }
 
-//
 // restore previously persisted state.
-//
 func (rf *Raft) readPersist(data []byte) {
 	if data == nil || len(data) < 1 { // bootstrap without any state?
 		return
