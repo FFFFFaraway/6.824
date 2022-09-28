@@ -13,10 +13,6 @@ type IdErr struct {
 
 func (kv *ShardKV) fetchShard(config shardctrler.Config) {
 	Debug(dInfo, kv.gid-100, "fetchShard %v", config)
-	_, leader := kv.rf.GetState()
-	if !leader {
-		return
-	}
 
 	responsibleShards := make([]int, 0)
 	finished := make(chan int)
