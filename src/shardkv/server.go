@@ -23,7 +23,7 @@ const (
 	RequestWaitTimeout   = 300 * time.Millisecond
 	ConfigurationTimeout = 100 * time.Millisecond
 	RetryLaterSpan       = 100 // time.Millisecond
-	RetryLaterTimeout    = 100 * time.Millisecond
+	RetryLaterTimeout    = 0 * time.Millisecond
 )
 
 type Op struct {
@@ -77,13 +77,8 @@ type ShardKV struct {
 }
 
 func (kv *ShardKV) getConfig(n int) shardctrler.Config {
-	if n == -1 {
-		<-kv.mckCh
-		c := kv.mck.Query(n)
-		go func() { kv.mckCh <- void{} }()
-		return c
-	}
 	inter, exist := kv.configCache.Load(n)
+	// if n == -1, never exist
 	if exist {
 		return inter.(shardctrler.Config)
 	} else {
