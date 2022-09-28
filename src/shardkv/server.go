@@ -16,12 +16,15 @@ const (
 	ConfigOp
 	GetShardOp
 	UpdateDataOp
+	DeleteBeforeOp
 )
 
 const (
 	RequestWaitTimeout   = 300 * time.Millisecond
 	ConfigurationTimeout = 100 * time.Millisecond
-	fetchShardTimeout    = 100 * time.Millisecond
+	RetryLaterSpan       = 100 // time.Millisecond
+	RetryLaterTimeout    = 0 * time.Millisecond
+	WaitAllDie           = 5 * time.Second
 )
 
 type Op struct {
@@ -42,12 +45,12 @@ type Op struct {
 
 type ShardKV struct {
 	//mu           sync.Mutex
-	me           int
-	rf           *raft.Raft
-	applyCh      chan raft.ApplyMsg
-	make_end     func(string) *labrpc.ClientEnd
-	gid          int
-	ctrlers      []*labrpc.ClientEnd
+	//me           int
+	rf      *raft.Raft
+	applyCh chan raft.ApplyMsg
+	//make_end     func(string) *labrpc.ClientEnd
+	gid int
+	//ctrlers      []*labrpc.ClientEnd
 	maxraftstate int // snapshot if log grows this big
 
 	// Your definitions here.
@@ -72,45 +75,6 @@ type ShardKV struct {
 	// protected by dataCh
 	snapshotLastIndex int
 	commitIndex       int
-	finishedConfig    int
-}
-
-func (kv *ShardKV) updateConfig() {
-	for {
-		select {
-		case <-kv.dead:
-			return
-		case <-timeoutCh(ConfigurationTimeout):
-			_, isLeader := kv.rf.GetState()
-			// only the leader need to update the configuration
-			if !isLeader {
-				continue
-			}
-
-			<-kv.mckCh
-			newConfig := kv.mck.Query(-1)
-			go func() { kv.mckCh <- void{} }()
-
-			//Debug(dInfo, kv.gid-100, "try update %v", newConfig)
-			// There are no others writing it, so we can copy once to avoid waiting lock
-			<-kv.configCh
-			if kv.config.Num >= newConfig.Num {
-				go func() { kv.configCh <- void{} }()
-				continue
-			}
-
-			//Debug(dInfo, kv.gid-100, "Need to update %v", newConfig)
-			if servers, exist := newConfig.Groups[kv.gid]; exist {
-				go func() { kv.configCh <- void{} }()
-				kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
-			} else if servers, exist := kv.config.Groups[kv.gid]; exist {
-				go func() { kv.configCh <- void{} }()
-				kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
-			} else {
-				go func() { kv.configCh <- void{} }()
-			}
-		}
-	}
 }
 
 func (kv *ShardKV) UpdateConfig(args *UpdateConfigArgs, reply *UpdateConfigReply) {
@@ -132,29 +96,17 @@ func (kv *ShardKV) GetShard(args *GetShardArgs, reply *GetShardReply) {
 		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,
 	}, func() Err {
-		<-kv.configCh
-		configNum := kv.config.Num
-		go func() { kv.configCh <- void{} }()
-
-		if configNum < args.ConfigNum {
-			Debug(dSnap, kv.gid-100, "GetShardOp I still in C%v, you ask me about C%v", configNum, args.ConfigNum)
-			return ErrNoResponsibility
-		}
-
 		<-kv.dataCh
 		defer func() { go func() { kv.dataCh <- void{} }() }()
 
 		data, exist := kv.data[args.Shard][args.ConfigNum]
 		dup := kv.appliedButNotReceived[args.Shard][args.ConfigNum]
 		if !exist {
-			if configNum > args.ConfigNum {
-				Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v", args.Shard)
-				return ErrNoResponsibility
-			}
-			// when finished, this configNum must have state (by this commit, or updateConfig commit)
-			// if not, try again
 			Debug(dSnap, kv.gid-100, "GetShardOp data not found S%v, but is about to appear", args.Shard)
-			return ErrWrongLeader
+			return ErrRetryLater
+		}
+		if deleteFlag, exist := data[""]; exist && deleteFlag == "" {
+			return ErrDeleted
 		}
 		reply.Data = mapCopy(data)
 		reply.Dup = mapCopy(dup)
@@ -171,6 +123,18 @@ func (kv *ShardKV) UpdateData(args *UpdateDataArgs, reply *UpdateDataReply) {
 		Data:      mapCopy(args.Data),
 		Dup:       mapCopy(args.Dup),
 		Operator:  UpdateDataOp,
+		RequestId: args.RequestId,
+		LastSuc:   args.LastSuc,
+	}, func() Err { return OK })
+}
+
+func (kv *ShardKV) DeleteBefore(args *DeleteBeforeArgs, reply *DeleteBeforeReply) {
+	//Debug(dInfo, kv.gid-100, "GetShard %+v", args)
+	//defer Debug(dInfo, kv.gid-100, "GetShard reply %+v", reply)
+	reply.Err = kv.Commit(Op{
+		Shard:     args.Shard,
+		ConfigNum: args.ConfigNum,
+		Operator:  DeleteBeforeOp,
 		RequestId: args.RequestId,
 		LastSuc:   args.LastSuc,
 	}, func() Err { return OK })
@@ -268,14 +232,10 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	labgob.Register(shardctrler.Config{})
 
 	kv := new(ShardKV)
-	kv.me = me
 	kv.maxraftstate = maxraftstate
-	kv.make_end = make_end
 	kv.gid = gid
-	kv.ctrlers = ctrlers
-
 	// Your initialization code here.
-	kv.mck = shardctrler.MakeClerk(kv.ctrlers)
+	kv.mck = shardctrler.MakeClerk(ctrlers)
 	kv.clerk = MakeClerk(ctrlers, make_end)
 
 	for s := range kv.data {
@@ -304,11 +264,10 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	//Debug(dInfo, kv.gid-100, "Restarted with data %v", kv.data)
 	//Debug(dInfo, kv.gid-100, "Restarted with appliedButNotReceived %v", kv.appliedButNotReceived)
 
-	go kv.waiting()
+	go kv.applier()
 	go kv.compareSnapshot()
 	go kv.cleaner()
 	go kv.updateConfig()
-	go kv.fetchShard()
 
 	return kv
 }

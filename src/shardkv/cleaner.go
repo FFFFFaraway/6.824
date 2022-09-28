@@ -1,9 +1,5 @@
 package shardkv
 
-import "time"
-
-const WaitAllDie = 5 * time.Second
-
 func (kv *ShardKV) cleaner() {
 	select {
 	case <-kv.dead:

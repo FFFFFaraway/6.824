@@ -248,6 +248,41 @@ func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data ma
 	}
 }
 
+func (ck *Clerk) DeleteBefore(shard, gid, configNum int, servers []string) {
+	rid := nrand()
+	for {
+		leaderIndex := 0
+		inter, exist := ck.leader.Load(gid)
+		if !exist || leaderIndex >= len(servers) {
+			ck.leader.Store(gid, 0)
+		} else {
+			leaderIndex = inter.(int)
+		}
+
+		lastSuc := int64(0)
+		inter, exist = ck.lastSuc.Load(gid)
+		if !exist {
+			ck.lastSuc.Store(gid, int64(0))
+		} else {
+			lastSuc = inter.(int64)
+		}
+		reply := &DeleteBeforeReply{}
+		if ck.make_end(servers[leaderIndex]).Call("ShardKV.DeleteBefore", &DeleteBeforeArgs{
+			Shard:     shard,
+			ConfigNum: configNum,
+			RequestId: rid,
+			LastSuc:   lastSuc,
+		}, &reply) {
+			if reply.Err != ErrWrongLeader {
+				ck.lastSuc.Store(gid, rid)
+				return
+			}
+		}
+		ck.leader.Store(gid, nextServer(leaderIndex, len(servers)))
+		time.Sleep(TryServerTimeout)
+	}
+}
+
 func (ck *Clerk) UpdateConfig(gid int, config shardctrler.Config, servers []string) {
 	rid := nrand()
 	for {
