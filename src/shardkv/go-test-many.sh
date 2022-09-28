@@ -51,7 +51,7 @@ fi
 
 rm test-*
 # Default to 100 runs unless otherwise specified
-runs=1280
+runs=32
 if [ $# -gt 0 ]; then
 	runs="$1"
 fi
@@ -61,10 +61,10 @@ fi
 #if [ $# -gt 1 ]; then
 #	parallelism="$2"
 #fi
-parallelism=32
+parallelism=8
 
 # Default to no test filtering unless otherwise specified
-test=""
+test="Concurrent2"
 #test=""
 if [ $# -gt 2 ]; then
 	test="$3"

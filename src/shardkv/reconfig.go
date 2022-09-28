@@ -129,12 +129,10 @@ func (kv *ShardKV) updateConfig() {
 					kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
 					break
 				}
+				if queryConfig.Num-1 <= 0 {
+					break
+				}
 				queryConfig = kv.getConfig(queryConfig.Num - 1)
-			}
-
-			// ensure all data before are filled
-			for n := 1; n <= newConfig.Num; n++ {
-				kv.fetchShard(kv.getConfig(n))
 			}
 		}
 	}

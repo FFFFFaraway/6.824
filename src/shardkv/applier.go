@@ -106,6 +106,12 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 				}
 			}
 			if leader {
+				go func() {
+					// ensure all data before are filled
+					for n := 1; n <= c.Config.Num; n++ {
+						kv.fetchShard(kv.getConfig(n))
+					}
+				}()
 				Debug(dSnap, kv.gid-100, "Update config %v, index %v", kv.config, index)
 			}
 		} else {
