@@ -26,6 +26,10 @@ func (kv *ShardKV) fetchShard(config shardctrler.Config) {
 	go func() { kv.dataCh <- void{} }()
 
 	need := len(responsibleShards)
+	if need == 0 {
+		Debug(dInfo, kv.gid-100, "Finished fill data C%v", config.Num)
+		return
+	}
 
 	for _, s := range responsibleShards {
 		go func(s int, prevConfig shardctrler.Config) {

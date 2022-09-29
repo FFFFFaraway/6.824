@@ -1,5 +1,7 @@
 package shardkv
 
+import "6.824/shardctrler"
+
 type IdErr struct {
 	ID  int64
 	Err Err
@@ -107,8 +109,37 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 			}
 			if leader {
 				go func() {
+					minFetched := c.Config.Num - 1
+				minLoop:
+					for {
+						if minFetched <= 0 {
+							break
+						}
+						config := kv.getConfig(minFetched)
+						fetchedShard := 0
+						need := 0
+						<-kv.dataCh
+						for s := 0; s < shardctrler.NShards; s++ {
+							if config.Shards[s] == kv.gid {
+								need += 1
+								if _, exist := kv.data[s][config.Num]; !exist {
+									minFetched -= 1
+									go func() { kv.dataCh <- void{} }()
+									continue minLoop
+								} else {
+									fetchedShard += 1
+								}
+							}
+						}
+						go func() { kv.dataCh <- void{} }()
+						if need != 0 && fetchedShard == need {
+							break
+						}
+						minFetched -= 1
+					}
+
 					// ensure all data before are filled
-					for n := 1; n <= c.Config.Num; n++ {
+					for n := minFetched + 1; n <= c.Config.Num; n++ {
 						kv.fetchShard(kv.getConfig(n))
 					}
 				}()
