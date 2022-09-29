@@ -108,8 +108,8 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 				}
 			}
 			if leader {
-				go func() {
-					minFetched := c.Config.Num - 1
+				go func(configNum int) {
+					minFetched := configNum - 1
 				minLoop:
 					for {
 						if minFetched <= 0 {
@@ -138,11 +138,12 @@ func (kv *ShardKV) applyCommand(index int, c Op) Err {
 						minFetched -= 1
 					}
 
+					Debug(dSnap, kv.gid-100, "Need to fetch: [%v, %v]", minFetched+1, configNum)
 					// ensure all data before are filled
-					for n := minFetched + 1; n <= c.Config.Num; n++ {
+					for n := minFetched + 1; n <= configNum; n++ {
 						kv.fetchShard(kv.getConfig(n))
 					}
-				}()
+				}(c.Config.Num)
 				Debug(dSnap, kv.gid-100, "Update config %v, index %v", kv.config, index)
 			}
 		} else {
