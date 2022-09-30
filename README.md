@@ -15,3 +15,5 @@ TODO List:
 - [x] Lab 4: Sharded Key/Value Service
   - [X] Part 4A
   - [x] Part 4B
+    - [x] Challenge1
+    - [x] Challenge2
