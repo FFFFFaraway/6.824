@@ -111,7 +111,7 @@ func (kv *ShardKV) updateConfig() {
 				continue
 			}
 
-			newConfig := kv.mck.Query(-1)
+			newConfig := kv.getConfig(-1)
 
 			//Debug(dInfo, kv.gid-100, "try update %v", newConfig)
 			<-kv.configCh
