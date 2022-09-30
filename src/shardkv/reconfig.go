@@ -26,6 +26,10 @@ func (kv *ShardKV) fetchShard(config shardctrler.Config) {
 	go func() { kv.dataCh <- void{} }()
 
 	need := len(responsibleShards)
+	if need == 0 {
+		Debug(dInfo, kv.gid-100, "Finished fill data C%v", config.Num)
+		return
+	}
 
 	for _, s := range responsibleShards {
 		go func(s int, prevConfig shardctrler.Config) {
@@ -54,6 +58,7 @@ func (kv *ShardKV) fetchShard(config shardctrler.Config) {
 						go func() { finished <- <-finished + 1 }()
 						return
 					} else if err == ErrRetryLater {
+						Debug(dInfo, kv.gid-100, "### S%v G%v C%v <- G%v C%v, ErrRetryLater", s, kv.gid-100, config.Num, requestGID-100, prevConfig.Num)
 						time.Sleep(RetryLaterTimeout + time.Duration(rand.Intn(RetryLaterSpan))*time.Millisecond)
 					} else if err == ErrDeleted {
 						Debug(dInfo, kv.gid-100, "### S%v G%v C%v <- G%v C%v, deleted", s, kv.gid-100, config.Num, requestGID-100, prevConfig.Num)
@@ -88,9 +93,7 @@ func (kv *ShardKV) getConfig(n int) shardctrler.Config {
 	if exist {
 		return inter.(shardctrler.Config)
 	} else {
-		<-kv.mckCh
 		c := kv.mck.Query(n)
-		go func() { kv.mckCh <- void{} }()
 		kv.configCache.Store(c.Num, c)
 		return c
 	}
@@ -108,9 +111,7 @@ func (kv *ShardKV) updateConfig() {
 				continue
 			}
 
-			<-kv.mckCh
-			newConfig := kv.mck.Query(-1)
-			go func() { kv.mckCh <- void{} }()
+			newConfig := kv.getConfig(-1)
 
 			//Debug(dInfo, kv.gid-100, "try update %v", newConfig)
 			<-kv.configCh
@@ -129,12 +130,10 @@ func (kv *ShardKV) updateConfig() {
 					kv.clerk.UpdateConfig(kv.gid, newConfig, servers)
 					break
 				}
+				if queryConfig.Num-1 <= 0 {
+					break
+				}
 				queryConfig = kv.getConfig(queryConfig.Num - 1)
-			}
-
-			// ensure all data before are filled
-			for n := 1; n <= newConfig.Num; n++ {
-				kv.fetchShard(kv.getConfig(n))
 			}
 		}
 	}

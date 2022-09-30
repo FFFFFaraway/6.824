@@ -20,6 +20,7 @@ import "time"
 const (
 	TryServerTimeout = 100 * time.Millisecond
 	TryGroupTimeout  = 100 * time.Millisecond
+	InternalTimeout  = 10 * time.Millisecond
 )
 
 // which shard is a key in?
@@ -207,7 +208,7 @@ func (ck *Clerk) GetShard(shard, gid, configNum int, servers []string) (map[stri
 			}
 		}
 		ck.leader.Store(gid, nextServer(leaderIndex, len(servers)))
-		time.Sleep(TryServerTimeout)
+		time.Sleep(InternalTimeout)
 	}
 }
 
@@ -244,7 +245,7 @@ func (ck *Clerk) UpdateData(shard, gid, configNum int, servers []string, data ma
 			}
 		}
 		ck.leader.Store(gid, nextServer(leaderIndex, len(servers)))
-		time.Sleep(TryServerTimeout)
+		time.Sleep(InternalTimeout)
 	}
 }
 
@@ -279,7 +280,7 @@ func (ck *Clerk) DeleteBefore(shard, gid, configNum int, servers []string) {
 			}
 		}
 		ck.leader.Store(gid, nextServer(leaderIndex, len(servers)))
-		time.Sleep(TryServerTimeout)
+		time.Sleep(InternalTimeout)
 	}
 }
 
@@ -313,7 +314,7 @@ func (ck *Clerk) UpdateConfig(gid int, config shardctrler.Config, servers []stri
 			}
 		}
 		ck.leader.Store(gid, nextServer(leaderIndex, len(servers)))
-		time.Sleep(TryServerTimeout)
+		time.Sleep(InternalTimeout)
 	}
 }
 

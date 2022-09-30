@@ -4,7 +4,10 @@ package shardctrler
 // Shardctrler clerk.
 //
 
-import "6.824/labrpc"
+import (
+	"6.824/labrpc"
+	"sync"
+)
 import "time"
 import "crypto/rand"
 import "math/big"
@@ -18,6 +21,7 @@ type Clerk struct {
 	// clerk doesn't have many goroutines
 	leader  int
 	lastSuc int64
+	mu      sync.Mutex
 }
 
 func nrand() int64 {
@@ -43,18 +47,26 @@ func (ck *Clerk) nextServer(server int) int {
 func (ck *Clerk) Query(num int) Config {
 	rid := nrand()
 	for {
+		ck.mu.Lock()
+		leader := ck.leader
+		lastSuc := ck.lastSuc
+		ck.mu.Unlock()
 		reply := &QueryReply{}
-		ok := ck.servers[ck.leader].Call("ShardCtrler.Query", &QueryArgs{
+		ok := ck.servers[leader].Call("ShardCtrler.Query", &QueryArgs{
 			Num:       num,
 			RequestId: rid,
-			LastSuc:   ck.lastSuc,
+			LastSuc:   lastSuc,
 		}, reply)
+
+		ck.mu.Lock()
 		if ok && !reply.WrongLeader {
 			ck.lastSuc = rid
+			ck.mu.Unlock()
 			return reply.Config
 		}
 		// there must no others modify it
 		ck.leader = ck.nextServer(ck.leader)
+		ck.mu.Unlock()
 		time.Sleep(TryServerTimeout)
 	}
 }

@@ -59,7 +59,6 @@ type ShardKV struct {
 	config      shardctrler.Config
 	configCache sync.Map
 	dead        chan void
-	mckCh       chan void
 	mck         *shardctrler.Clerk
 	// each index allocate a channel to inform the waiting request
 	// map[specIndex int]committed RequestId in spec index, chan int64
@@ -244,7 +243,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.applyCh = make(chan raft.ApplyMsg)
 	kv.dataCh = make(chan void)
 	kv.configCh = make(chan void)
-	kv.mckCh = make(chan void)
 	for s := range kv.data {
 		kv.data[s] = make(map[int]map[string]string)
 	}
@@ -254,7 +252,6 @@ func StartServer(servers []*labrpc.ClientEnd, me int, persister *raft.Persister,
 	kv.snapshotLastIndex = 0
 	kv.commitIndex = 0
 
-	go func() { kv.mckCh <- void{} }()
 	go func() { kv.configCh <- void{} }()
 	go func() { kv.dataCh <- void{} }()
 

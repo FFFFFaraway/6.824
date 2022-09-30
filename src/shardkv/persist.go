@@ -12,6 +12,7 @@ func (kv *ShardKV) compareSnapshot() {
 		case <-kv.dead:
 			return
 		case <-timeoutCh(100 * time.Millisecond):
+			<-kv.configCh
 			<-kv.dataCh
 			if kv.maxraftstate != -1 &&
 				kv.commitIndex > kv.snapshotLastIndex &&
@@ -21,6 +22,7 @@ func (kv *ShardKV) compareSnapshot() {
 				Debug(dSnap, kv.gid-100, "Done Snapshot before %v", kv.commitIndex)
 			}
 			go func() { kv.dataCh <- void{} }()
+			go func() { kv.configCh <- void{} }()
 		}
 	}
 }

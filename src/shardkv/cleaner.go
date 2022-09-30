@@ -7,7 +7,6 @@ func (kv *ShardKV) cleaner() {
 		for {
 			select {
 			case <-kv.configCh:
-			case <-kv.mckCh:
 			case <-kv.dataCh:
 			case <-timeoutCh(WaitAllDie):
 				return
