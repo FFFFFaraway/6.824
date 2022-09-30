@@ -14,6 +14,6 @@ TODO List:
   - [x] Part 3B
 - [x] Lab 4: Sharded Key/Value Service
   - [X] Part 4A
-  - [x] Part 4B
-    - [x] Challenge1
-    - [x] Challenge2
+  - [x] Part 4B (pass 5000 times)
+    - [x] Challenge1 (pass 5000 times)
+    - [x] Challenge2 (pass 5000 times)
