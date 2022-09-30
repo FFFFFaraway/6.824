@@ -50,28 +50,58 @@ const (
 	waitTimeout = 500 * time.Millisecond
 )
 
-func (sc *ShardCtrler) balance(groups map[int][]string) (shards [10]int) {
+func (sc *ShardCtrler) balance(groups map[int][]string, before [NShards]int) (after [NShards]int) {
 	if len(groups) == 0 {
 		return
 	}
 
 	// deterministic
-	var keys []int
+	var gids []int
 	for k := range groups {
-		keys = append(keys, k)
+		gids = append(gids, k)
 	}
-	sort.Ints(keys)
+	sort.Ints(gids)
 
-	i := 0
-	for {
-		for _, gid := range keys {
-			shards[i] = gid
-			i++
-			if i >= NShards {
-				return
-			}
+	canHold := make(map[int]int)
+	N := NShards
+	NG := len(gids)
+
+	for _, gid := range gids {
+		canHold[gid] = N / NG
+		N -= canHold[gid]
+		NG -= 1
+	}
+
+	valid := 0
+	for _, h := range canHold {
+		valid += h
+	}
+	if valid != NShards {
+		panic("balance error: canHold count not equal to NShards")
+	}
+
+	for s := 0; s < NShards; s++ {
+		if canHold[before[s]] > 0 {
+			after[s] = before[s]
+			canHold[before[s]] -= 1
 		}
 	}
+
+	for s := 0; s < NShards; s++ {
+		if after[s] == 0 {
+			for _, gid := range gids {
+				if canHold[gid] > 0 {
+					after[s] = gid
+					canHold[gid] -= 1
+					break
+				}
+			}
+		}
+		if after[s] == 0 {
+			panic("balance error: some shard can't allocate to RG")
+		}
+	}
+	return
 }
 
 func mapCopy(m map[int][]string) (res map[int][]string) {
@@ -82,7 +112,7 @@ func mapCopy(m map[int][]string) (res map[int][]string) {
 	return
 }
 
-func listCopy(l [10]int) (res [10]int) {
+func listCopy(l [NShards]int) (res [NShards]int) {
 	for i := range l {
 		res[i] = l[i]
 	}
@@ -108,7 +138,7 @@ func (sc *ShardCtrler) applyCommand(index int, c Op) {
 		if len(lastConfig.Groups) == 0 {
 			newConfig := Config{
 				Num:    lastConfig.Num + 1,
-				Shards: sc.balance(c.Servers),
+				Shards: sc.balance(c.Servers, lastConfig.Shards),
 				Groups: c.Servers,
 			}
 			sc.configs = append(sc.configs, newConfig)
@@ -121,7 +151,7 @@ func (sc *ShardCtrler) applyCommand(index int, c Op) {
 		for gid, servers := range c.Servers {
 			newConfig.Groups[gid] = servers
 		}
-		newConfig.Shards = sc.balance(newConfig.Groups)
+		newConfig.Shards = sc.balance(newConfig.Groups, lastConfig.Shards)
 		sc.configs = append(sc.configs, newConfig)
 	case LeaveOp:
 		lastConfig := sc.configs[len(sc.configs)-1]
@@ -132,7 +162,7 @@ func (sc *ShardCtrler) applyCommand(index int, c Op) {
 		for _, gid := range c.GIDs {
 			delete(newConfig.Groups, gid)
 		}
-		newConfig.Shards = sc.balance(newConfig.Groups)
+		newConfig.Shards = sc.balance(newConfig.Groups, lastConfig.Shards)
 		sc.configs = append(sc.configs, newConfig)
 	case MoveOp:
 		lastConfig := sc.configs[len(sc.configs)-1]
